@@ -136,6 +136,30 @@ Ali
 
 ---
 
+## Step 7b — Turn on the password (restrict access to pilot testers)
+
+The app has a built-in shared-password gate. It reads the password from Streamlit's **Secrets** — never from the code — so the password is never in your public repo.
+
+**Until you set a password, the deployed app stays open and shows a yellow "not password-protected yet" warning.** To require a login:
+
+1. Open your app's admin view: at [share.streamlit.io](https://share.streamlit.io), find your app and click **Manage app** (or the ⋮ menu → Settings).
+2. Go to the **Secrets** section.
+3. Paste this single line, choosing your own password:
+
+   ```toml
+   password = "choose-a-strong-shared-password"
+   ```
+
+4. Click **Save**. The app reboots in a few seconds, and from then on every visitor must enter that password once per session.
+
+To change the password later, edit the secret and save. To remove the gate, delete the secret (the app reverts to open with the warning).
+
+**Local testing:** the password for running the app on your own Mac lives in `.streamlit/secrets.toml` (git-ignored, never deployed). The default there is `mriqa-pilot-2026` — change it if you like. The local and cloud passwords are independent.
+
+Give your colleagues the password through a separate channel (not in the same email as nothing-else — a quick text or Slack is fine). It's a shared password for the whole pilot group.
+
+---
+
 ## Step 8 — Iterate
 
 Every time you change code in `~/Documents/Claude/Projects/mriqa-ai/`:

@@ -8,6 +8,7 @@ Deployed: Streamlit Community Cloud points at this file.
 
 from __future__ import annotations
 
+import hmac
 import io
 import sys
 import zipfile
@@ -41,6 +42,53 @@ APP_VERSION = "0.2.0-mvp"
 # --------------------------------------------------------------------------- #
 # Helpers                                                                     #
 # --------------------------------------------------------------------------- #
+
+
+def _configured_password():
+    """Return the shared password from Streamlit secrets, or None if unset."""
+    try:
+        return st.secrets.get("password")
+    except Exception:
+        return None
+
+
+def check_password() -> bool:
+    """Gate the app behind a shared password stored in Streamlit secrets.
+
+    Behaviour:
+      * If no password is configured, the app stays open but shows a loud
+        warning (so the admin is never locked out during setup).
+      * If a password is configured, visitors must enter it once per session.
+    """
+    configured = _configured_password()
+    if not configured:
+        st.warning(
+            "This app is **not password-protected yet**. "
+            "Admin: add a `password` entry in your Streamlit Cloud app secrets "
+            "(Manage app → Settings → Secrets) to require a login. See DEPLOY.md."
+        )
+        return True
+
+    if st.session_state.get("auth_ok", False):
+        return True
+
+    def _verify():
+        entered = st.session_state.get("auth_pw", "")
+        if hmac.compare_digest(str(entered), str(configured)):
+            st.session_state["auth_ok"] = True
+            st.session_state.pop("auth_pw", None)
+        else:
+            st.session_state["auth_ok"] = False
+
+    st.markdown("#### Sign in")
+    st.text_input("Password", type="password", key="auth_pw", on_change=_verify)
+    if st.session_state.get("auth_ok") is False:
+        st.error("Incorrect password. Please try again.")
+    st.caption(
+        "Access is restricted to pilot testers. Contact the app owner for the password. "
+        "Please upload anonymized ACR phantom DICOMs only — no patient data."
+    )
+    return False
 
 
 def _normalize_img(img: np.ndarray, wl: float | None = None, ww: float | None = None) -> np.ndarray:
@@ -181,6 +229,11 @@ st.markdown(
 )
 
 st.title("MRIQA.ai — ACR Large Phantom QA")
+
+# ---- Password gate (shared password via Streamlit secrets) ---------------- #
+if not check_password():
+    st.stop()
+
 st.caption(
     "Decision-support tool for medical physicists. "
     "**Not a medical device. Not for diagnostic use.** "
