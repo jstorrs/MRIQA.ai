@@ -1,0 +1,21 @@
+# Streamlit appearance + server settings for the deployed app.
+# Anything user-secret (API keys, etc) belongs in secrets.toml, NOT here.
+
+[theme]
+base = "light"
+primaryColor = "#0B7CC4"           # MRIQA blue — calm clinical
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F5F7FA"
+textColor = "#1A2330"
+font = "sans serif"
+
+[server]
+maxUploadSize = 500                 # MB; an ACR phantom T1 series is ~5 MB, room to spare
+enableXsrfProtection = true
+enableCORS = false
+
+[browser]
+gatherUsageStats = false
+
+[ui]
+hideTopBar = false                  # keep Streamlit's hamburger for now (deploy / share)

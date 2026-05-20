@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+
+# Virtual environment
+.venv/
+venv/
+
+# Streamlit runtime files
+.streamlit/secrets.toml
+.streamlit.pid
+.streamlit.port
+streamlit.log
+launch.log
+
+# macOS / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Exports — generated PDFs/CSVs are runtime output, not source
+exports/
+
+# Local test data — do NOT commit phantom DICOMs to a public repo
+*.dcm
+*.zip
+acr_data/
+samples/

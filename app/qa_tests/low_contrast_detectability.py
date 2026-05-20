@@ -1,0 +1,78 @@
+"""Test 7 — Low-Contrast Object Detectability / LCD (ACR MR QC Manual 2015 §3.7)
+
+User-confirmation test.
+
+Procedure
+---------
+Slices 8, 9, 10, 11 each contain a low-contrast disk pattern (10 spokes,
+each spoke a series of disks of decreasing contrast). The technologist
+counts the number of *complete* spokes visible on each slice; the test
+result is the sum across all four slices.
+
+Action limits at 3 T: ≥ 9 spokes.
+At < 3 T: ≥ 7 spokes (manual cites 9 if extremity coil, 7 for body).
+This MVP defaults to 9 at 3 T and 7 otherwise.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+from ..io_dicom.dicom_loader import DicomSeries
+from ..utils.phantom import localize_phantom
+from ..utils.viz import render_annotated
+from .base import Measurement, TestResult
+
+
+def run(series: DicomSeries, *, user_input: dict | None = None) -> TestResult:
+    """`user_input` is a dict {8: spokes, 9: spokes, 10: spokes, 11: spokes}."""
+    res = TestResult(
+        test_id="low_contrast_detectability",
+        test_name="Low-Contrast Object Detectability",
+        automated=False,
+        passed=None,
+    )
+    try:
+        for acr in (8, 9, 10, 11):
+            if acr not in series.acr_slice_map:
+                continue
+            img = series.slice(acr).astype(np.float32)
+            geom = localize_phantom(img)
+            # crop a square around the phantom for the user to look at
+            H, W = img.shape
+            y0 = max(0, int(geom.cy_px - geom.radius_px * 1.05))
+            y1 = min(H, int(geom.cy_px + geom.radius_px * 1.05))
+            x0 = max(0, int(geom.cx_px - geom.radius_px * 1.05))
+            x1 = min(W, int(geom.cx_px + geom.radius_px * 1.05))
+            crop = img[y0:y1, x0:x1]
+            def _draw(ax, acr=acr):
+                ax.set_title(f"Slice {acr} — low-contrast spokes", fontsize=10)
+            res.annotated_images.append((f"Slice {acr} — LCD pattern",
+                                         render_annotated(crop, "", _draw)))
+
+        if user_input:
+            total = 0
+            for acr in (8, 9, 10, 11):
+                v = int(user_input.get(acr, 0) or 0)
+                total += v
+                res.measurements.append(Measurement(
+                    label=f"Slice {acr} spokes seen",
+                    value=float(v),
+                    unit="spokes",
+                ))
+            is_3t = series.metadata.field_strength_t >= 3.0 - 0.05
+            threshold = 9 if is_3t else 7
+            res.measurements.append(Measurement(
+                label="Total spokes (slices 8–11)",
+                value=float(total),
+                unit="spokes",
+                spec=f"≥ {threshold}",
+                passed=total >= threshold,
+            ))
+            res.passed = total >= threshold
+        else:
+            res.notes = "Count complete spokes on each slice and enter values in the UI."
+    except Exception as exc:
+        res.passed = None
+        res.error = f"{type(exc).__name__}: {exc}"
+    return res
