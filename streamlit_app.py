@@ -266,6 +266,20 @@ with st.sidebar:
         help="Accepts a folder zip or individual .dcm files.",
     )
 
+    st.markdown("**Optional: sagittal localizer**")
+    st.caption(
+        "Upload the sagittal scout to enable the geometric-accuracy "
+        "superior-inferior length (148 mm) check, which cannot be measured "
+        "on an axial slice."
+    )
+    uploaded_loc = st.file_uploader(
+        "Localizer (.zip or .dcm)",
+        type=None,
+        accept_multiple_files=True,
+        key="loc_uploader",
+        help="The sagittal localizer/scout series.",
+    )
+
     with st.expander("Advanced — load from a local folder"):
         local_folder = st.text_input(
             "Path to a folder of .dcm files",
@@ -276,7 +290,7 @@ with st.sidebar:
     if st.session_state.get("series") is not None:
         st.divider()
         if st.button("Reset / load a new series", use_container_width=True):
-            for k in ("series", "results"):
+            for k in ("series", "results", "localizer", "series_warnings"):
                 st.session_state.pop(k, None)
             st.rerun()
 
@@ -297,6 +311,8 @@ if "validation_log" not in st.session_state:
     st.session_state.validation_log = []    # list[dict]
 if "series_warnings" not in st.session_state:
     st.session_state.series_warnings = []   # non-fatal warnings from validate_series
+if "localizer" not in st.session_state:
+    st.session_state.localizer = None       # optional sagittal localizer series
 
 series: DicomSeries | None = st.session_state.series
 
@@ -327,6 +343,19 @@ elif uploaded:
         st.session_state.series_warnings = validate_series(series)
     except Exception as exc:
         _show_load_error(exc)
+
+# Optional localizer (loaded independently; attached to the main series below)
+if uploaded_loc:
+    try:
+        loc_sources = _expand_uploads(uploaded_loc)
+        st.session_state.localizer = load_series(loc_sources)
+    except Exception as exc:
+        st.sidebar.warning(f"Could not load localizer: {exc}")
+        st.session_state.localizer = None
+
+# Attach the localizer to the active series so geometric accuracy can use it
+if series is not None:
+    series.localizer = st.session_state.get("localizer")
 
 # --------------------------------------------------------------------------- #
 # Landing page when no series is loaded                                       #

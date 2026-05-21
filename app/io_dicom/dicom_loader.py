@@ -54,6 +54,9 @@ class DicomSeries:
     datasets: list[FileDataset] = field(default_factory=list, repr=False)
     # Mapping from "ACR slice role" (e.g. 1, 5, 7, 11) -> physical slice index 0..n-1
     acr_slice_map: dict[int, int] = field(default_factory=dict)
+    # Optional sagittal localizer series, attached for the geometric-accuracy
+    # S-I length (148 mm) measurement which cannot be done on an axial slice.
+    localizer: "DicomSeries | None" = field(default=None, repr=False)
 
     def slice(self, acr_role: int) -> np.ndarray:
         """Return the 2D pixel array for the given ACR slice role (1-based)."""
