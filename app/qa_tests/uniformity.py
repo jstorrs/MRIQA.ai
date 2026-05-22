@@ -75,13 +75,31 @@ def run(series: DicomSeries) -> TestResult:
             box_size = 3
         small_mean = uniform_filter(img, size=box_size)
 
-        # Candidate centers: large ROI minus a margin of r_small
+        # --- Exclude air / voids (e.g. the phantom's top air bubble or any
+        #     structural void) so they don't dominate the "low" ROI. We measure
+        #     the uniformity of phantom *material*, not air. A small ROI is only
+        #     a valid candidate if it lies entirely on phantom signal.
+        med = float(np.median(img[large_mask]))
+        air = (img < 0.5 * med).astype(np.float32)
+        air_frac = uniform_filter(air, size=box_size)   # fraction of small ROI that is air
+
+        # Candidate centers: large ROI, away from the image edge, no air overlap
         margin = int(math.ceil(r_small))
-        eroded = np.copy(large_mask)
-        # Quick erode by zeroing rows/cols within `margin` of the boundary:
         ys, xs = np.where(large_mask)
         valid = (ys >= margin) & (ys < img.shape[0] - margin) & (xs >= margin) & (xs < img.shape[1] - margin)
         ys, xs = ys[valid], xs[valid]
+        af = air_frac[ys, xs]
+        clean = af <= 1e-6
+        n_excluded = int((~clean).sum())
+        if clean.sum() >= 10:           # keep only air-free candidates if enough remain
+            ys, xs = ys[clean], xs[clean]
+        if n_excluded > 20:
+            res.add_warning(
+                f"Excluded {n_excluded} ROI position(s) overlapping air/void (e.g. the "
+                "phantom's top air bubble) from the uniformity search. Uniformity is "
+                "measured on phantom material only.",
+                severity="medium" if n_excluded > 800 else "high",
+            )
 
         means = small_mean[ys, xs]
         i_max = int(np.argmax(means))

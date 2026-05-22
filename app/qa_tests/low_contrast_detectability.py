@@ -38,17 +38,33 @@ def run(series: DicomSeries, *, user_input: dict | None = None) -> TestResult:
                 continue
             img = series.slice(acr).astype(np.float32)
             geom = localize_phantom(img)
-            # crop a square around the phantom for the user to look at
+            # Zoom onto the central low-contrast disk pattern (the spokes occupy
+            # roughly the central 0.7R) so the faint disks are easier to count.
             H, W = img.shape
-            y0 = max(0, int(geom.cy_px - geom.radius_px * 1.05))
-            y1 = min(H, int(geom.cy_px + geom.radius_px * 1.05))
-            x0 = max(0, int(geom.cx_px - geom.radius_px * 1.05))
-            x1 = min(W, int(geom.cx_px + geom.radius_px * 1.05))
+            f = 0.78
+            y0 = max(0, int(geom.cy_px - geom.radius_px * f))
+            y1 = min(H, int(geom.cy_px + geom.radius_px * f))
+            x0 = max(0, int(geom.cx_px - geom.radius_px * f))
+            x1 = min(W, int(geom.cx_px + geom.radius_px * f))
             crop = img[y0:y1, x0:x1]
+
+            # A tighter contrast window makes the low-contrast spokes more visible.
+            inner = crop[crop > crop.max() * 0.2]
+            if inner.size:
+                lo = float(np.percentile(inner, 25))
+                hi = float(np.percentile(inner, 99.5))
+                wl = (lo + hi) / 2.0
+                ww = max(1.0, (hi - lo) * 1.1)
+            else:
+                wl = ww = None
+
             def _draw(ax, acr=acr):
-                ax.set_title(f"Slice {acr} — low-contrast spokes", fontsize=10)
-            res.annotated_images.append((f"Slice {acr} — LCD pattern",
-                                         render_annotated(crop, "", _draw)))
+                ax.set_title(f"Slice {acr} — low-contrast spokes (count complete spokes)",
+                             fontsize=9)
+
+            res.annotated_images.append((
+                f"Slice {acr} — LCD pattern",
+                render_annotated(crop, "", _draw, wl=wl, ww=ww)))
 
         if user_input:
             total = 0

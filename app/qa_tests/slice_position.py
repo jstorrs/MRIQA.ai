@@ -1,26 +1,31 @@
 """Test 4 — Slice Position Accuracy (ACR MR QC Manual 2015 §3.4)
 
-Procedure
+Geometry (validated against real Siemens Skyra ACR data)
+--------------------------------------------------------
+At the top-centre of slices 1 and 11 sits a pair of vertical bars (signal
+voids cut into the top of the phantom), separated by a thin septum. Both
+bars share a top edge (the phantom rim). When the slice is correctly
+positioned the two bars descend to the same depth; a slice-position error
+makes one bar longer than the other.
+
+We measure the vertical length of the left bar and the right bar and report
+
+    bar_difference = left_length - right_length   (mm)
+
+Action limit: |bar_difference| ≤ 5 mm.
+
+Algorithm
 ---------
-Slices 1 and 11 contain a pair of vertical bars (a "wedge" pair) that
-sit on either side of the phantom center near the top of each slice.
-When the slice is correctly positioned, the two bars have equal length.
+1.  Localize the phantom (centre + radius).
+2.  Find the phantom rim near the top centre.
+3.  For each column across the bar pair, find the dark bar run (first
+    contiguous void below the rim); keep only solid bar columns.
+4.  Split the bar columns into left / right halves about their midpoint.
+5.  Sub-pixel locate each bar's bottom edge (half-max dark→bright crossing),
+    take the median per side, and difference the two lengths.
 
-For each of slice 1 and slice 11:
-  * Measure the length of the left bar and the right bar.
-  * `bar_difference = left_length - right_length`  (mm)
-  * The ACR reports `bar_difference / 2` as the slice-position offset.
-
-Action limit: |bar_difference| ≤ 5 mm. The MVP reports the value and
-flags pass/fail accordingly.
-
-Implementation
---------------
-* Find the phantom; restrict to a horizontal band just inside the
-  superior edge.
-* In that band, find the two vertical bright bars.
-* For each bar, find its top and bottom row from the column profile and
-  convert to mm.
+Replaces an earlier version that measured full-height vertical column
+profiles (it returned the whole phantom diameter, not the short bars).
 """
 
 from __future__ import annotations
@@ -28,7 +33,6 @@ from __future__ import annotations
 import numpy as np
 
 from ..io_dicom.dicom_loader import DicomSeries
-from ..utils.geometry import fwhm_from_profile
 from ..utils.phantom import localize_phantom
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
@@ -36,72 +40,69 @@ from .base import Measurement, TestResult
 BAR_DIFF_TOLERANCE_MM = 5.0
 
 
-def _measure_wedge_pair(image: np.ndarray, geom):
-    """Return ((left_len_px, left_col), (right_len_px, right_col), search_box).
+def _measure_one(img: np.ndarray, ps_row: float):
+    """Return a dict with bar lengths + geometry for one slice."""
+    geom = localize_phantom(img)
+    cx, R = geom.cx_px, geom.radius_px
+    bg = float(np.median(img[img > img.max() * 0.3]))
+    half = bg * 0.5
 
-    Slice 1 / 11 wedge pair sits within the slice-thickness insert area
-    near the top of the phantom in axial orientation.
-    """
-    H, W = image.shape
-    # Search box near the *top* of the phantom (small y values)
-    cy, cx, r = geom.cy_px, geom.cx_px, geom.radius_px
-    y0 = max(0, int(cy - 0.95 * r))
-    y1 = max(y0 + 8, int(cy - 0.55 * r))
-    x0 = max(0, int(cx - 0.20 * r))
-    x1 = min(W, int(cx + 0.20 * r))
-    box = image[y0:y1, x0:x1]
-    if box.size == 0:
-        raise ValueError("Wedge search window is empty.")
+    # 1. Phantom rim near the top, sampled from a solid column beside the bars
+    side_c = int(cx - 0.22 * R)
+    side_c = min(max(side_c, 0), img.shape[1] - 1)
+    rim = int(np.argmax(img[:, side_c] > half))
+    r0, r1 = rim, int(rim + 0.5 * R)
 
-    # Column means; expect two peaks
-    col_means = box.mean(axis=0)
-    thresh = np.percentile(col_means, 70)
-    above = col_means > thresh
-    runs = []
-    in_run = False
-    start = 0
-    for i, v in enumerate(above):
-        if v and not in_run:
-            in_run = True; start = i
-        elif not v and in_run:
-            in_run = False; runs.append((start, i - 1))
-    if in_run:
-        runs.append((start, len(above) - 1))
-    # Sort by mean intensity, keep top two, then order by column
-    runs.sort(key=lambda r_: col_means[r_[0]:r_[1] + 1].mean(), reverse=True)
-    runs = sorted(runs[:2], key=lambda r_: r_[0])
-    if len(runs) < 2:
-        raise ValueError("Could not detect two vertical wedge bars.")
+    # 2. Per-column first dark run (the bar) below the rim
+    col_top, col_bot = {}, {}
+    for c in range(int(cx - 15), int(cx + 16)):
+        if c < 0 or c >= img.shape[1]:
+            continue
+        seg = img[r0:r1, c]
+        dark = seg < half
+        i, n = 0, len(dark)
+        while i < n and not dark[i]:
+            i += 1
+        if i >= n:
+            continue
+        j = i
+        while j < n and dark[j]:
+            j += 1
+        if (j - i) >= 12:
+            col_top[c] = r0 + i
+            col_bot[c] = r0 + (j - 1)
 
-    bar_cols_local = [(rr[0] + rr[1]) // 2 for rr in runs]
+    cols = sorted(col_bot)
+    if len(cols) < 4:
+        raise ValueError("Slice-position bar pair not found at top-centre.")
+    cmid = (cols[0] + cols[-1]) / 2
+    left = [c for c in cols if c < cmid]
+    right = [c for c in cols if c >= cmid]
+    if not left or not right:
+        raise ValueError("Could not separate the left/right slice-position bars.")
+    top_shared = float(np.median([col_top[c] for c in cols]))
 
-    # For each bar, get the column profile through the *full* image and measure FWHM
-    left_col = x0 + bar_cols_local[0]
-    right_col = x0 + bar_cols_local[1]
-    # Vertical profile through the full phantom height
-    y_top = max(0, int(cy - r))
-    y_bot = min(H, int(cy + r))
-    left_prof = image[y_top:y_bot, left_col]
-    right_prof = image[y_top:y_bot, right_col]
-    left_len_px = fwhm_from_profile(left_prof)
-    right_len_px = fwhm_from_profile(right_prof)
-    return (left_len_px, left_col), (right_len_px, right_col), (y0, y1, x0, x1)
+    def _refine(colset):
+        prof = img[r0:r1, colset].mean(axis=1)
+        base = np.percentile(prof, 10)
+        peak = np.percentile(prof, 90)
+        hf = base + 0.5 * (peak - base)
+        approx = int(np.median([col_bot[c] for c in colset]) - r0)
+        for i in range(max(1, approx - 5), min(len(prof) - 1, approx + 6)):
+            if prof[i] < hf <= prof[i + 1]:
+                return r0 + i + (hf - prof[i]) / (prof[i + 1] - prof[i] + 1e-9)
+        return float(r0 + approx)
 
-
-def _run_one(image: np.ndarray, ps, label_prefix: str):
-    geom = localize_phantom(image)
-    (lL, lC), (rL, rC), box = _measure_wedge_pair(image, geom)
-    left_mm = lL * ps[0]
-    right_mm = rL * ps[0]
-    bar_diff_mm = left_mm - right_mm
+    lb = _refine(left)
+    rb = _refine(right)
+    left_len = (lb - top_shared) * ps_row
+    right_len = (rb - top_shared) * ps_row
     return {
-        "left_mm": left_mm,
-        "right_mm": right_mm,
-        "bar_diff_mm": bar_diff_mm,
-        "left_col": lC,
-        "right_col": rC,
-        "geom": geom,
-        "box": box,
+        "left_len": left_len, "right_len": right_len,
+        "bar_diff": left_len - right_len,
+        "left_col": int(np.median(left)), "right_col": int(np.median(right)),
+        "top": top_shared, "left_bot": lb, "right_bot": rb,
+        "cx": cx, "R": R, "rim": rim,
     }
 
 
@@ -115,51 +116,62 @@ def run(series: DicomSeries) -> TestResult:
     try:
         ps = series.metadata.pixel_spacing_mm
         for acr_slice in (1, 11):
+            if acr_slice not in series.acr_slice_map:
+                continue
             img = series.slice(acr_slice).astype(np.float32)
-            r = _run_one(img, ps, f"Slice {acr_slice}")
-            diff = r["bar_diff_mm"]
+            try:
+                r = _measure_one(img, ps[0])
+            except Exception as exc:
+                res.measurements.append(Measurement(
+                    label=f"Slice {acr_slice} bar-length difference",
+                    value=float("nan"), unit="mm",
+                    spec=f"|Δ| ≤ {BAR_DIFF_TOLERANCE_MM} mm", passed=None,
+                ))
+                res.add_warning(f"Slice {acr_slice}: {exc}", severity="medium")
+                continue
+
+            diff = r["bar_diff"]
             passed = abs(diff) <= BAR_DIFF_TOLERANCE_MM
             res.measurements.append(Measurement(
                 label=f"Slice {acr_slice} bar-length difference",
-                value=round(diff, 2),
-                unit="mm",
-                spec=f"|Δ| ≤ {BAR_DIFF_TOLERANCE_MM} mm",
-                passed=passed,
+                value=round(diff, 2), unit="mm",
+                spec=f"|Δ| ≤ {BAR_DIFF_TOLERANCE_MM} mm", passed=passed,
             ))
 
             def _draw(ax, r=r, acr_slice=acr_slice):
-                cy = r["geom"].cy_px
-                # Plot vertical lines at the two bar columns spanning the
-                # measured bar lengths.
-                H = img.shape[0]
-                # Approximate vertical center of bars at top of phantom
-                y_top = max(0, int(r["geom"].cy_px - r["geom"].radius_px))
-                y_left_end = y_top + int(r["left_mm"] / ps[0])
-                y_right_end = y_top + int(r["right_mm"] / ps[0])
-                ax.plot([r["left_col"], r["left_col"]], [y_top, y_left_end], color="cyan", lw=2)
-                ax.plot([r["right_col"], r["right_col"]], [y_top, y_right_end], color="magenta", lw=2)
-                ax.annotate(f"L={r['left_mm']:.1f}", (r["left_col"], y_left_end), color="cyan",
-                            fontsize=8, ha="center", va="top",
-                            xytext=(0, 8), textcoords="offset points")
-                ax.annotate(f"R={r['right_mm']:.1f}", (r["right_col"], y_right_end), color="magenta",
-                            fontsize=8, ha="center", va="top",
-                            xytext=(0, 8), textcoords="offset points")
-                ax.set_title(f"Slice {acr_slice} — bar Δ = {r['bar_diff_mm']:+.2f} mm", fontsize=10)
+                ax.plot([r["left_col"], r["left_col"]], [r["top"], r["left_bot"]],
+                        color="cyan", lw=2)
+                ax.plot([r["right_col"], r["right_col"]], [r["top"], r["right_bot"]],
+                        color="magenta", lw=2)
+                ax.annotate(f"L={r['left_len']:.1f}", (r["left_col"], r["left_bot"]),
+                            color="cyan", fontsize=8, ha="right", va="top",
+                            xytext=(-4, 6), textcoords="offset points")
+                ax.annotate(f"R={r['right_len']:.1f}", (r["right_col"], r["right_bot"]),
+                            color="magenta", fontsize=8, ha="left", va="top",
+                            xytext=(4, 6), textcoords="offset points")
+                pad = int(0.55 * r["R"])
+                ax.set_xlim(r["cx"] - pad, r["cx"] + pad)
+                ax.set_ylim(r["top"] + 0.6 * r["R"], r["rim"] - 8)
+                ax.set_title(f"Slice {acr_slice} — bar Δ = {r['bar_diff']:+.2f} mm", fontsize=10)
 
-            res.annotated_images.append((f"Slice {acr_slice} — slice position",
-                                         render_annotated(img, "", _draw)))
+            res.annotated_images.append((
+                f"Slice {acr_slice} — slice position (Δ={diff:+.2f} mm)",
+                render_annotated(img, "", _draw)))
 
-        res.passed = all(m.passed for m in res.measurements)
-        res.notes = "Bar lengths are FWHM of vertical column profiles. Δ = left − right."
-
-        # --- Detection-quality heuristics ---
-        for m in res.measurements:
-            if abs(m.value) > 20:
+            # Detection-quality heuristic
+            if abs(diff) > 15:
                 res.add_warning(
-                    f"{m.label}: |Δ| = {abs(m.value):.1f} mm is implausibly large — the wedge "
-                    "detector may have caught the wrong feature. Check the overlay.",
+                    f"Slice {acr_slice}: |Δ| = {abs(diff):.1f} mm is implausibly large — "
+                    "the bar detector may have caught the wrong feature. Check the overlay.",
                     severity="low",
                 )
+
+        verdicts = [m.passed for m in res.measurements if m.passed is not None]
+        res.passed = all(verdicts) if verdicts else None
+        res.notes = (
+            "Left/right bar lengths measured from the shared phantom rim to each bar's "
+            "sub-pixel bottom edge. Δ = left − right; action limit |Δ| ≤ 5 mm."
+        )
     except Exception as exc:
         res.passed = None
         res.error = f"{type(exc).__name__}: {exc}"

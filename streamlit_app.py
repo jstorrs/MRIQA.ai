@@ -62,10 +62,10 @@ def check_password() -> bool:
     """
     configured = _configured_password()
     if not configured:
-        st.warning(
-            "This app is **not password-protected yet**. "
-            "Admin: add a `password` entry in your Streamlit Cloud app secrets "
-            "(Manage app → Settings → Secrets) to require a login. See DEPLOY.md."
+        # No password set (e.g. local development). Open access, slim notice.
+        st.caption(
+            "🔓 Open access (no password set). To require a login on the deployed "
+            "app, add a `password` secret in Streamlit Cloud — see DEPLOY.md."
         )
         return True
 
@@ -290,7 +290,8 @@ with st.sidebar:
     if st.session_state.get("series") is not None:
         st.divider()
         if st.button("Reset / load a new series", use_container_width=True):
-            for k in ("series", "results", "localizer", "series_warnings"):
+            for k in ("series", "results", "localizer", "series_warnings",
+                      "view_wl", "view_ww"):
                 st.session_state.pop(k, None)
             st.rerun()
 
@@ -448,19 +449,37 @@ tab_viewer, tab_slices, tab_run, tab_results, tab_history, tab_validation, tab_e
 with tab_viewer:
     st.subheader("Slice viewer")
     n = md.n_slices
+
+    # Volume-wide auto window so the same level/width applies to ALL slices
+    # (like a standard DICOM viewer) instead of resetting per slice.
+    vol = series.pixel_array
+    auto_wl = round(float(np.nanmean(vol)), 1) if vol.size else 0.0
+    auto_ww = round(float(max(1.0, np.nanstd(vol) * 4 + 1)), 1) if vol.size else 1.0
+    if "view_wl" not in st.session_state:
+        st.session_state.view_wl = auto_wl
+    if "view_ww" not in st.session_state:
+        st.session_state.view_ww = auto_ww
+
+    def _reset_window():
+        st.session_state.view_wl = auto_wl
+        st.session_state.view_ww = auto_ww
+
     if n <= 1:
         idx = 1
         st.info("Series has only one slice; slider disabled.")
     else:
         idx = st.slider("Slice index (1-based)", 1, n, 1)
 
-    img_raw = series.pixel_array[idx - 1]
-    wl_default = float(np.nanmean(img_raw)) if img_raw.size else 0.0
-    ww_default = float(np.nanstd(img_raw) * 4 + 1) if img_raw.size else 1.0
-    cwl, cww = st.columns(2)
-    wl = cwl.number_input("Window level", value=round(wl_default, 1))
-    ww = cww.number_input("Window width", value=round(max(1.0, ww_default), 1), min_value=1.0)
-    img = _normalize_img(img_raw, wl=wl, ww=ww)
+    cwl, cww, cbtn = st.columns([2, 2, 1])
+    cwl.number_input("Window level", key="view_wl", step=10.0)
+    cww.number_input("Window width", key="view_ww", min_value=1.0, step=10.0)
+    with cbtn:
+        st.markdown("<div style='height:1.7em'></div>", unsafe_allow_html=True)
+        st.button("Auto", on_click=_reset_window, use_container_width=True,
+                  help="Reset window to the auto level/width for this series.")
+    st.caption("Window level/width applies to all slices as you scroll.")
+
+    img = _normalize_img(vol[idx - 1], wl=st.session_state.view_wl, ww=st.session_state.view_ww)
     st.image(img, caption=f"Slice {idx} of {n}", width=560)
 
 # ----- Slice mapping ---------------------------------------------------- #

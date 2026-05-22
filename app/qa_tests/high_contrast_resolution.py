@@ -35,17 +35,80 @@ def crop_resolution_insert(image: np.ndarray, geom, corner: str) -> np.ndarray:
     phantom, roughly at radius 0.65*r along the diagonals.
     """
     H, W = image.shape
-    cy, cx, r = geom.cy_px, geom.cx_px, geom.radius_px
-    half = int(0.35 * r)
-    if corner.lower() == "ul":
-        yc = int(cy - 0.60 * r)
-        xc = int(cx - 0.60 * r)
-    else:  # 'lr'
-        yc = int(cy + 0.60 * r)
-        xc = int(cx + 0.60 * r)
-    y0, y1 = max(0, yc - half), min(H, yc + half)
-    x0, x1 = max(0, xc - half), min(W, xc + half)
+    bb = _detect_resolution_bbox(image, geom)
+    if bb is None:
+        # Geometric fallback relative to the phantom centre
+        cy, cx, r = geom.cy_px, geom.cx_px, geom.radius_px
+        bb = (int(cy + 0.34 * r), int(cy + 0.58 * r),
+              int(cx - 0.28 * r), int(cx + 0.52 * r))
+
+    r0, r1, c0, c1 = bb
+    h = r1 - r0
+    cl = corner.lower()
+    if cl == "ul":          # upper blocks (vertical-hole arrays)
+        y0, y1 = r0 - 5, r0 + int(0.62 * h) + 3
+    elif cl == "lr":        # lower blocks (horizontal-hole arrays)
+        y0, y1 = r0 + int(0.30 * h) - 1, r1 + 6
+    else:                   # 'full' — the whole insert
+        y0, y1 = r0 - 5, r1 + 6
+    x0, x1 = c0 - 4, c1 + 5
+    y0, y1 = max(0, y0), min(H, y1)
+    x0, x1 = max(0, x0), min(W, x1)
     return image[y0:y1, x0:x1], (y0, y1, x0, x1)
+
+
+def _longest_true_run(mask):
+    best = (0, 0, 0)
+    start = None
+    seq = list(mask) + [False]
+    for i, v in enumerate(seq):
+        if v and start is None:
+            start = i
+        elif not v and start is not None:
+            if i - start > best[0]:
+                best = (i - start, start, i - 1)
+            start = None
+    return best
+
+
+def _detect_resolution_bbox(image, geom):
+    """Locate the hole-array block in the lower-centre of slice 1.
+
+    The arrays are faint mid-level signal (brighter than the dark insert
+    interior, much darker than the bright phantom walls). We search a
+    generous window below the phantom centre, threshold for that mid band,
+    and take the densest contiguous row run. Returns (r0,r1,c0,c1) or None.
+    """
+    import numpy as np
+    cy, cx, r = geom.cy_px, geom.cx_px, geom.radius_px
+    H, W = image.shape
+    r0 = max(0, int(cy + 0.20 * r)); r1 = min(H, int(cy + 0.72 * r))
+    c0 = max(0, int(cx - 0.28 * r)); c1 = min(W, int(cx + 0.52 * r))
+    if r1 - r0 < 6 or c1 - c0 < 20:
+        return None
+    win = image[r0:r1, c0:c1]
+    void = np.percentile(win, 15)
+    phantom = np.percentile(win, 97)
+    span = phantom - void
+    if span < 1e-6:
+        return None
+    lo = void + 0.04 * span
+    hi = void + 0.35 * span
+    arr = (win > lo) & (win < hi)
+    rc = arr.sum(axis=1)
+    L, rs, re = _longest_true_run(rc > max(3, rc.max() * 0.20))
+    if L < 6:
+        return None
+    cc = arr[rs:re + 1].sum(axis=0)
+    ci = np.where(cc > max(2, cc.max() * 0.12))[0]
+    if ci.size < 2:
+        return None
+    ay0, ay1 = r0 + rs, r0 + re
+    ax0, ax1 = c0 + int(ci[0]), c0 + int(ci[-1])
+    # Plausibility for the ACR resolution block
+    if not (8 <= (ay1 - ay0) <= 45 and 35 <= (ax1 - ax0) <= 95):
+        return None
+    return (ay0, ay1, ax0, ax1)
 
 
 def run(series: DicomSeries, *, user_input: dict | None = None) -> TestResult:
@@ -63,13 +126,26 @@ def run(series: DicomSeries, *, user_input: dict | None = None) -> TestResult:
     try:
         img = series.slice(1).astype(np.float32)
         geom = localize_phantom(img)
-        for corner in ("UL", "LR"):
+
+        # Full insert first (all three pairs), then the UL and LR block rows.
+        full_crop, _ = crop_resolution_insert(img, geom, "full")
+
+        def _draw_full(ax):
+            ax.set_title("Slice 1 — resolution insert: 1.1 | 1.0 | 0.9 mm (left→right)",
+                         fontsize=9)
+        res.annotated_images.append((
+            "Slice 1 — resolution insert (1.1 / 1.0 / 0.9 mm, left→right). "
+            "UL blocks = vertical holes (upper), LR blocks = horizontal holes (lower).",
+            render_annotated(full_crop, "", _draw_full, figsize=(8.0, 3.0))))
+
+        for corner, label in (("UL", "UL blocks (vertical-hole arrays)"),
+                              ("LR", "LR blocks (horizontal-hole arrays)")):
             crop, _ = crop_resolution_insert(img, geom, corner)
-            def _draw(ax, corner=corner):
-                ax.set_title(f"Slice 1 — {corner} hole arrays (zoom)", fontsize=10)
+            def _draw(ax, label=label):
+                ax.set_title(f"Slice 1 — {label}", fontsize=9)
             res.annotated_images.append((
-                f"Slice 1 — {corner} hole arrays",
-                render_annotated(crop, "", _draw)))
+                f"Slice 1 — {label}",
+                render_annotated(crop, "", _draw, figsize=(8.0, 2.4))))
 
         if user_input:
             spec = float(user_input.get("spec", 1.0))
