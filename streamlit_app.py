@@ -280,6 +280,16 @@ with st.sidebar:
         help="The sagittal localizer/scout series.",
     )
 
+    st.markdown("**Scanner field strength**")
+    field_choice = st.selectbox(
+        "Used for the PIU / low-contrast action limits",
+        ["Auto (from DICOM)", "1.5 T", "3.0 T"],
+        index=0,
+        help="If the DICOM is missing the MagneticFieldStrength tag (shows B0 = 0.0 T), "
+             "set it here so the correct ACR thresholds apply (PIU ≥ 87.5% at 3 T vs "
+             "≥ 82% at 1.5 T).",
+    )
+
     with st.expander("Advanced — load from a local folder"):
         local_folder = st.text_input(
             "Path to a folder of .dcm files",
@@ -357,6 +367,13 @@ if uploaded_loc:
 # Attach the localizer to the active series so geometric accuracy can use it
 if series is not None:
     series.localizer = st.session_state.get("localizer")
+    # Apply a manual field-strength override (used for PIU / low-contrast limits)
+    # when the DICOM tag is missing or the user wants to force a value.
+    if field_choice == "1.5 T":
+        series.metadata.field_strength_t = 1.5
+    elif field_choice == "3.0 T":
+        series.metadata.field_strength_t = 3.0
+    # "Auto" leaves the DICOM-derived value as-is.
 
 # --------------------------------------------------------------------------- #
 # Landing page when no series is loaded                                       #
@@ -537,6 +554,14 @@ with tab_run:
         st.session_state.results = results
         prog.empty()
         st.success("Done. Open the **Results** tab.")
+
+    st.info(
+        "**Two tests are scored visually by you** — High-Contrast Spatial Resolution "
+        "and Low-Contrast Object Detectability. The ACR manual defines these as visual "
+        "(human-judged) tests, so the app shows you the correctly-located images and you "
+        "enter what you see below. **They stay at status REVIEW until you score and save — "
+        "that's expected, not an error or failure.**"
+    )
 
     st.markdown("### Visual scoring — high-contrast resolution")
     st.caption("On slice 1, look at the UL and LR hole arrays in the zoomed crops "
