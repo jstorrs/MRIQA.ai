@@ -95,7 +95,7 @@ LARGE = PhantomSpec(
     si_length_plausible_mm=(130.0, 165.0),
     # § 0.3 + Table 2 — 11-slice axial protocol
     n_protocol_slices=11,
-    slice_role_indices={1: 0, 5: 4, 7: 6, 11: 10},
+    slice_role_indices={1: 0, 5: 4, 7: 6, 8: 7, 9: 8, 10: 9, 11: 10},
     # § 3.4 — slice thickness limits are identical between Large and Medium
     nominal_slice_thickness_mm=5.0,
     slice_thickness_tolerance_mm=0.7,
@@ -145,7 +145,7 @@ MEDIUM = PhantomSpec(
     si_length_plausible_mm=(115.0, 150.0),
     # § 0.3 + Table 2 — both ACR phantoms use the same 11-slice axial protocol
     n_protocol_slices=11,
-    slice_role_indices={1: 0, 5: 4, 7: 6, 11: 10},
+    slice_role_indices={1: 0, 5: 4, 7: 6, 8: 7, 9: 8, 10: 9, 11: 10},
     # § 3.4 — slice thickness limits are identical between Large and Medium
     nominal_slice_thickness_mm=5.0,
     slice_thickness_tolerance_mm=0.7,

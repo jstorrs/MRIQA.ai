@@ -282,12 +282,20 @@ def default_acr_slice_map(n_slices: int, spec: PhantomSpec | None = None) -> dic
         return {}
     # Best effort: spread across whatever we have
     n_prot = spec.n_protocol_slices
-    return {
+    out: dict[int, int] = {
         1: 0,
         5: min(n_slices - 1, n_slices // 2 - 1 if n_slices >= 2 else 0),
         7: min(n_slices - 1, (n_slices * 6) // n_prot),
         11: n_slices - 1,
     }
+    # Map LCD-adjacent roles relative to whatever we picked for slice 11,
+    # so LCD scoring still has something to display on partial series.
+    last = out[11]
+    for role, offset in ((10, 1), (9, 2), (8, 3)):
+        idx = last - offset
+        if idx >= 0:
+            out[role] = idx
+    return out
 
 
 def load_series_from_folder(folder: str | Path) -> DicomSeries:

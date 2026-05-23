@@ -547,7 +547,7 @@ with tab_slices:
         st.warning("Two or more ACR roles are mapped to the same physical slice. "
                    "This is unusual — confirm before running QA.")
 
-    series.acr_slice_map = new_map
+    series.acr_slice_map = {**series.acr_slice_map, **new_map}
     st.session_state.series = series
 
 # ----- Run QA ----------------------------------------------------------- #
@@ -585,8 +585,14 @@ with tab_run:
     )
 
     st.markdown("### Visual scoring — high-contrast resolution")
-    st.caption("On slice 1, look at the UL and LR hole arrays in the zoomed crops "
-               "(shown in Results once the QA has been run).")
+    st.caption("On slice 1, look at the UL and LR hole arrays in the zoomed crops below.")
+    _hcr_existing = st.session_state.results.get("high_contrast_resolution")
+    if _hcr_existing is not None and _hcr_existing.annotated_images:
+        _hcr_images = _hcr_existing.annotated_images
+    else:
+        _hcr_images = high_contrast_resolution.run(series, spec=series.spec).annotated_images
+    for _cap, _im in _hcr_images:
+        st.image(_im, caption=_cap, width="stretch")
     res_sizes = list(series.spec.resolution_array_sizes_mm)
     res_default_idx = (
         res_sizes.index(series.spec.resolution_pass_threshold_mm)
@@ -613,6 +619,16 @@ with tab_run:
     lcd_range_label = f"{lcd_slices[0]}–{lcd_slices[-1]}"
     st.markdown("### Visual scoring — low-contrast object detectability")
     st.caption(f"Count complete spokes visible on each of slices {lcd_range_label}.")
+    _lcd_existing = st.session_state.results.get("low_contrast_detectability")
+    if _lcd_existing is not None and _lcd_existing.annotated_images:
+        _lcd_images = _lcd_existing.annotated_images
+    else:
+        _lcd_images = low_contrast_detectability.run(series, spec=series.spec).annotated_images
+    if _lcd_images:
+        _img_cols = st.columns(min(len(_lcd_images), 4))
+        for i, (_cap, _im) in enumerate(_lcd_images):
+            with _img_cols[i % len(_img_cols)]:
+                st.image(_im, caption=_cap, width="stretch")
     cs = st.columns(len(lcd_slices))
     spoke_counts: dict[int, int] = {}
     for col, s in zip(cs, lcd_slices):
