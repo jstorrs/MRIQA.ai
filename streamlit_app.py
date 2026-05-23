@@ -370,13 +370,43 @@ with st.sidebar:
     )
     st.divider()
 
+    catalog = st.session_state.series_catalog
+    if catalog:
+        uid_options = [e["uid"] for e in catalog]
+        labels = {e["uid"]: _series_label(e) for e in catalog}
+        # Default the picker to the previously-selected UID (if still present),
+        # otherwise to the first entry in the list.
+        if st.session_state.get("selected_series_uid") not in uid_options:
+            st.session_state.selected_series_uid = uid_options[0]
+        def _on_series_pick():
+            # Set a one-shot flag the main page consumes to switch the active
+            # tab to Analysis after the user picks a different series.
+            st.session_state.pending_tab_switch = "Analysis"
+
+        st.selectbox(
+            f"Series ({len(catalog)} loaded)",
+            options=uid_options,
+            format_func=lambda u: labels[u],
+            key="selected_series_uid",
+            on_change=_on_series_pick,
+            help="Pick which series to analyze. Drop more files below to "
+                 "extend this list.",
+        )
+
+        if st.button("Clear all series", width="stretch"):
+            for k in ("series", "results", "series_warnings",
+                      "view_wl", "view_ww",
+                      "series_catalog", "selected_series_uid", "loaded_series_uid"):
+                st.session_state.pop(k, None)
+            st.rerun()
+
     new_uploads = st.file_uploader(
         "Add DICOMs (drop files or a .zip)",
         type=None,
         accept_multiple_files=True,
         key=f"uploader_{st.session_state.uploader_nonce}",
         help="Drop .dcm files, a folder zip, or any mix. Each batch is scanned "
-             "and added to the series list below.",
+             "and added to the series list above.",
     )
 
     if new_uploads:
@@ -401,36 +431,6 @@ with st.sidebar:
         # Bump the nonce so the widget remounts as an empty drop zone on rerun.
         st.session_state.uploader_nonce += 1
         st.rerun()
-
-    catalog = st.session_state.series_catalog
-    if catalog:
-        uid_options = [e["uid"] for e in catalog]
-        labels = {e["uid"]: _series_label(e) for e in catalog}
-        # Default the picker to the previously-selected UID (if still present),
-        # otherwise to the first entry in the list.
-        if st.session_state.get("selected_series_uid") not in uid_options:
-            st.session_state.selected_series_uid = uid_options[0]
-        def _on_series_pick():
-            # Set a one-shot flag the main page consumes to switch the active
-            # tab to Analysis after the user picks a different series.
-            st.session_state.pending_tab_switch = "Analysis"
-
-        st.selectbox(
-            f"Series ({len(catalog)} loaded)",
-            options=uid_options,
-            format_func=lambda u: labels[u],
-            key="selected_series_uid",
-            on_change=_on_series_pick,
-            help="Pick which series to analyze. Add more files above to extend "
-                 "this list.",
-        )
-
-        if st.button("Clear all series", width="stretch"):
-            for k in ("series", "results", "series_warnings",
-                      "view_wl", "view_ww",
-                      "series_catalog", "selected_series_uid", "loaded_series_uid"):
-                st.session_state.pop(k, None)
-            st.rerun()
 
     with st.expander("Advanced — load from a local folder"):
         local_folder = st.text_input(
@@ -597,13 +597,13 @@ if st.session_state.series_warnings and analysis_mode == "axial":
 # --------------------------------------------------------------------------- #
 
 if analysis_mode == "axial":
-    tab_slices, tab_results, tab_manual, tab_viewer, tab_history, tab_validation, tab_export = st.tabs(
-        ["Analysis", "Results", "Manual scoring", "Viewer",
-         "History", "Validation", "Export"]
+    tab_slices, tab_manual, tab_viewer, tab_results, tab_validation, tab_history, tab_export = st.tabs(
+        ["Analysis", "Manual scoring", "Viewer", "Results",
+         "Validation", "History", "Export"]
     )
 else:
-    tab_results, tab_viewer, tab_history, tab_validation, tab_export = st.tabs(
-        ["Analysis", "Viewer", "History", "Validation", "Export"]
+    tab_results, tab_viewer, tab_validation, tab_history, tab_export = st.tabs(
+        ["Analysis", "Viewer", "Validation", "History", "Export"]
     )
     tab_slices = None
     tab_manual = None
@@ -741,16 +741,41 @@ def _render_analysis_inputs(series, *, key_prefix: str, show_sequence: bool = Tr
     series.metadata.field_strength_t = 1.5 if fld == "1.5 T" else 3.0
 
 
-def _render_results_view(test_order, analysis_mode, series, *, key_prefix: str):
-    """Render the verdict banner + summary table + per-test details + a
-    save-to-history button. Shared between the Results tab and the inline
-    view on the Analysis tab. `key_prefix` keeps Streamlit widget
-    keys unique when the same view is rendered in two places."""
-    # Axial: nudge the user toward manual scoring once automated results are
-    # in but the visual tests are still pending. If any automated test FAILED,
-    # the nudge becomes a warning instead — manual scoring is usually a waste
-    # of time on a series with a clear acquisition / calibration problem.
-    if analysis_mode == "axial":
+def _render_results_view(test_order, analysis_mode, series, *,
+                         key_prefix: str, scope: str = "all"):
+    """Render the verdict banner + summary table + per-test details, and
+    (when `scope="all"`) a save-to-history button. `scope` controls which
+    subset of tests is shown:
+
+      - ``"automated"`` — non-visual tests only. Used inline on the Analysis
+        tab so the user sees what the automated run produced without empty
+        REVIEW rows for un-scored visual tests.
+      - ``"manual"`` — visual tests only. Used inline on the Manual scoring
+        tab so the saved HCR / LCD rows appear right after Save.
+      - ``"all"`` — every test. Used on the Results tab and on the sagittal
+        Analysis tab (which IS the only results surface in sagittal mode).
+
+    The verdict is computed over the displayed subset, so the Analysis tab
+    can show PASS without being held back by un-scored visuals. The
+    save-to-history button only renders for ``scope="all"`` to keep the
+    primary "I'm done" action on Results.
+    """
+    if scope == "automated":
+        displayed_order = [t for t in test_order if t[0] not in _VISUAL_TEST_IDS]
+    elif scope == "manual":
+        displayed_order = [t for t in test_order if t[0] in _VISUAL_TEST_IDS]
+    else:
+        displayed_order = list(test_order)
+
+    displayed_ids = {tid for tid, _, _ in displayed_order}
+    displayed_results = {
+        tid: r for tid, r in st.session_state.results.items() if tid in displayed_ids
+    }
+
+    # Pending-visual nudge: useful whenever the view spans the manual subset
+    # ("automated" → your next step is Manual; "all" → you still have manual
+    # to score). On the manual tab itself the hint would be redundant.
+    if analysis_mode == "axial" and scope != "manual":
         visual_pending = [
             tid for tid in _VISUAL_TEST_IDS
             if tid not in st.session_state.results
@@ -774,7 +799,7 @@ def _render_results_view(test_order, analysis_mode, series, *, key_prefix: str):
                 "**Manual scoring** tab if you need a complete report."
             )
 
-    verdict, counts = _overall_status(st.session_state.results)
+    verdict, counts = _overall_status(displayed_results)
     verdict_cls = {
         "PASS": "PASS", "FAIL": "FAIL", "REVIEW": "REVIEW",
         "ERROR": "ERROR", "—": "dash",
@@ -794,7 +819,7 @@ def _render_results_view(test_order, analysis_mode, series, *, key_prefix: str):
     )
 
     rows = []
-    for tid, _, _ in test_order:
+    for tid, _, _ in displayed_order:
         r: TestResult | None = st.session_state.results.get(tid)
         if r is None:
             rows.append({"Test": tid, "Status": "—", "Confidence": "—", "Detail": ""})
@@ -812,7 +837,7 @@ def _render_results_view(test_order, analysis_mode, series, *, key_prefix: str):
     st.dataframe(rows, hide_index=True, width="stretch")
 
     st.markdown("### Per-test details")
-    for tid, label, _ in test_order:
+    for tid, label, _ in displayed_order:
         r: TestResult | None = st.session_state.results.get(tid)
         if r is None:
             continue
@@ -843,11 +868,12 @@ def _render_results_view(test_order, analysis_mode, series, *, key_prefix: str):
                     with img_cols[i % len(img_cols)]:
                         st.image(im, caption=cap, width="stretch")
 
-    st.divider()
-    if st.button("Save this run to History", key=f"{key_prefix}_save_history"):
-        snap = _snapshot_run(series, dict(st.session_state.results))
-        st.session_state.history.append(snap)
-        st.success(f"Snapshot saved — {len(st.session_state.history)} run(s) in this session.")
+    if scope == "all":
+        st.divider()
+        if st.button("Save this run to History", key=f"{key_prefix}_save_history"):
+            snap = _snapshot_run(series, dict(st.session_state.results))
+            st.session_state.history.append(snap)
+            st.success(f"Snapshot saved — {len(st.session_state.history)} run(s) in this session.")
 
 
 def _run_automated_tests(series, test_order):
@@ -935,7 +961,8 @@ if tab_slices is not None:
         if st.session_state.results:
             st.divider()
             _render_results_view(test_order, analysis_mode, series,
-                                 key_prefix="slice_run_tab")
+                                 key_prefix="slice_run_tab",
+                                 scope="automated")
 
 # ----- Results / sagittal Analysis -------------------------------------- #
 with tab_results:
@@ -1104,6 +1131,17 @@ if tab_manual is not None:
             )
             st.session_state.results["low_contrast_detectability"] = res
             st.success("Saved.")
+
+        # Show just the manual results inline once at least one visual test
+        # has been scored. The full automated+manual roll-up lives on Results.
+        manual_done = any(
+            tid in _VISUAL_TEST_IDS for tid in st.session_state.results
+        )
+        if manual_done:
+            st.divider()
+            _render_results_view(test_order, analysis_mode, series,
+                                 key_prefix="manual_tab",
+                                 scope="manual")
 
 # ----- History (in-browser-session) ------------------------------------- #
 with tab_history:
