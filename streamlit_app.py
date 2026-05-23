@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import pydicom
 import streamlit as st
 
 # ---- make the `app/` package importable --------------------------------- #
@@ -128,6 +129,72 @@ def _expand_uploads(uploaded_files) -> list:
         else:
             sources.append(data)
     return sources
+
+
+def _uploads_signature(uploaded_files) -> str:
+    """Stable key for an upload set — used to cache series catalogs across reruns."""
+    return ";".join(f"{uf.name}:{getattr(uf, 'size', len(uf.getvalue()))}"
+                    for uf in uploaded_files)
+
+
+def _catalog_uploads(uploaded_files) -> list[dict]:
+    """Group every DICOM file across the uploads by SeriesInstanceUID.
+
+    Returns a list of entries like
+        {"uid", "description", "number", "modality", "n_files", "sources"}
+    sorted by SeriesNumber. `sources` is a list of raw bytes ready to hand to
+    ``load_series``. Files without a parseable header are skipped silently;
+    files without a SeriesInstanceUID are grouped under an empty UID so they
+    can still be picked.
+    """
+    by_uid: dict[str, dict] = {}
+    for uf in uploaded_files:
+        name = uf.name.lower()
+        data = uf.read()
+        payloads: list[bytes] = []
+        if name.endswith(".zip"):
+            try:
+                z = zipfile.ZipFile(io.BytesIO(data))
+                for info in z.infolist():
+                    if info.is_dir():
+                        continue
+                    nlow = info.filename.lower()
+                    if "__macosx" in nlow or nlow.endswith(".ds_store"):
+                        continue
+                    payloads.append(z.read(info))
+            except zipfile.BadZipFile:
+                st.error(f"Could not read zip: {uf.name}")
+                continue
+        else:
+            payloads.append(data)
+        for payload in payloads:
+            try:
+                ds = pydicom.dcmread(io.BytesIO(payload), force=True, stop_before_pixels=True)
+            except Exception:
+                continue
+            uid = str(getattr(ds, "SeriesInstanceUID", "") or "")
+            entry = by_uid.setdefault(uid, {
+                "uid": uid,
+                "description": str(getattr(ds, "SeriesDescription", "") or ""),
+                "number": int(getattr(ds, "SeriesNumber", 0) or 0),
+                "modality": str(getattr(ds, "Modality", "") or ""),
+                "n_files": 0,
+                "sources": [],
+            })
+            entry["n_files"] += 1
+            entry["sources"].append(payload)
+    return sorted(by_uid.values(),
+                  key=lambda e: (e["number"] or 0, e["description"]))
+
+
+def _series_label(entry: dict) -> str:
+    parts = []
+    if entry["number"]:
+        parts.append(f"#{entry['number']}")
+    desc = entry["description"] or "(no description)"
+    parts.append(desc)
+    parts.append(f"[{entry['modality'] or '?'}, {entry['n_files']} files]")
+    return " ".join(parts)
 
 
 def _status_badge(status: str) -> str:
@@ -325,7 +392,9 @@ with st.sidebar:
         st.divider()
         if st.button("Reset / load a new series", use_container_width=True):
             for k in ("series", "results", "localizer", "series_warnings",
-                      "view_wl", "view_ww"):
+                      "view_wl", "view_ww",
+                      "upload_catalog", "selected_series_uid", "loaded_series_uid",
+                      "loc_upload_catalog", "selected_loc_uid", "loaded_loc_uid"):
                 st.session_state.pop(k, None)
             st.rerun()
 
@@ -371,19 +440,91 @@ if local_folder.strip():
         _show_load_error(exc)
 elif uploaded:
     try:
-        sources = _expand_uploads(uploaded)
-        series = load_series(sources)
-        st.session_state.series = series
-        st.session_state.results = {}
-        st.session_state.series_warnings = validate_series(series)
+        sig = _uploads_signature(uploaded)
+        cache = st.session_state.get("upload_catalog")
+        if not cache or cache.get("sig") != sig:
+            catalog = _catalog_uploads(uploaded)
+            st.session_state.upload_catalog = {"sig": sig, "entries": catalog}
+            # New upload set -> drop any previous selection so the user's
+            # first-in-list choice picks up.
+            st.session_state.pop("selected_series_uid", None)
+        else:
+            catalog = cache["entries"]
+
+        if not catalog:
+            _show_load_error(DicomLoadError(
+                "No DICOM files found in the upload.",
+                tip="The uploader accepts .dcm files or zips containing them.",
+            ))
+        else:
+            if len(catalog) > 1:
+                uid_options = [e["uid"] for e in catalog]
+                labels = {e["uid"]: _series_label(e) for e in catalog}
+                default_idx = 0
+                if st.session_state.get("selected_series_uid") in uid_options:
+                    default_idx = uid_options.index(
+                        st.session_state["selected_series_uid"])
+                chosen_uid = st.sidebar.selectbox(
+                    f"Series ({len(catalog)} found in upload)",
+                    options=uid_options,
+                    format_func=lambda u: labels[u],
+                    index=default_idx,
+                    key="selected_series_uid",
+                    help="Pick which series in the uploaded zip to analyze.",
+                )
+            else:
+                chosen_uid = catalog[0]["uid"]
+                st.session_state["selected_series_uid"] = chosen_uid
+
+            chosen = next(e for e in catalog if e["uid"] == chosen_uid)
+            # Only reload if the selection changed since the last successful load
+            if st.session_state.get("loaded_series_uid") != chosen_uid:
+                series = load_series(chosen["sources"])
+                st.session_state.series = series
+                st.session_state.results = {}
+                st.session_state.series_warnings = validate_series(series)
+                st.session_state.loaded_series_uid = chosen_uid
+            else:
+                series = st.session_state.series
     except Exception as exc:
         _show_load_error(exc)
 
 # Optional localizer (loaded independently; attached to the main series below)
 if uploaded_loc:
     try:
-        loc_sources = _expand_uploads(uploaded_loc)
-        st.session_state.localizer = load_series(loc_sources)
+        loc_sig = _uploads_signature(uploaded_loc)
+        loc_cache = st.session_state.get("loc_upload_catalog")
+        if not loc_cache or loc_cache.get("sig") != loc_sig:
+            loc_catalog = _catalog_uploads(uploaded_loc)
+            st.session_state.loc_upload_catalog = {"sig": loc_sig, "entries": loc_catalog}
+            st.session_state.pop("selected_loc_uid", None)
+        else:
+            loc_catalog = loc_cache["entries"]
+        if not loc_catalog:
+            st.sidebar.warning("No DICOMs found in the localizer upload.")
+            st.session_state.localizer = None
+        else:
+            if len(loc_catalog) > 1:
+                loc_options = [e["uid"] for e in loc_catalog]
+                loc_labels = {e["uid"]: _series_label(e) for e in loc_catalog}
+                loc_default = 0
+                if st.session_state.get("selected_loc_uid") in loc_options:
+                    loc_default = loc_options.index(
+                        st.session_state["selected_loc_uid"])
+                chosen_loc_uid = st.sidebar.selectbox(
+                    f"Localizer series ({len(loc_catalog)} found)",
+                    options=loc_options,
+                    format_func=lambda u: loc_labels[u],
+                    index=loc_default,
+                    key="selected_loc_uid",
+                )
+            else:
+                chosen_loc_uid = loc_catalog[0]["uid"]
+                st.session_state["selected_loc_uid"] = chosen_loc_uid
+            chosen_loc = next(e for e in loc_catalog if e["uid"] == chosen_loc_uid)
+            if st.session_state.get("loaded_loc_uid") != chosen_loc_uid:
+                st.session_state.localizer = load_series(chosen_loc["sources"])
+                st.session_state.loaded_loc_uid = chosen_loc_uid
     except Exception as exc:
         st.sidebar.warning(f"Could not load localizer: {exc}")
         st.session_state.localizer = None
