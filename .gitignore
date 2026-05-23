@@ -30,3 +30,7 @@ exports/
 *.zip
 acr_data/
 samples/
+
+# ACR phantom test guidance — copyrighted, do NOT commit
+MR_ACR_Large_Med_Phantom_Guidance*.txt
+MR ACR Large Med Phantom Guidance*.pdf
