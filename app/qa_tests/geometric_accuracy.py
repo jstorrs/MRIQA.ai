@@ -49,11 +49,16 @@ def _measure_length_along(image: np.ndarray, angle_deg: float, pixel_spacing_mm)
     p0 = (cy - L / 2 * dy, cx - L / 2 * dx)
     p1 = (cy + L / 2 * dy, cx + L / 2 * dx)
 
-    entry, exit_ = find_phantom_edges_along_line(image, p0, p1, n=600)
-    ys = np.linspace(p0[0], p1[0], 600)
-    xs = np.linspace(p0[1], p1[1], 600)
-    y_in, x_in = ys[int(entry)], xs[int(entry)]
-    y_out, x_out = ys[int(exit_)], xs[int(exit_)]
+    n = 600
+    entry, exit_ = find_phantom_edges_along_line(image, p0, p1, n=n)
+    # find_phantom_edges_along_line returns sub-pixel positions along the
+    # sampled segment; interpolate the (y, x) endpoints rather than rounding
+    # to the nearest sample.
+    def _endpoint(t: float) -> tuple[float, float]:
+        f = t / (n - 1)
+        return p0[0] + (p1[0] - p0[0]) * f, p0[1] + (p1[1] - p0[1]) * f
+    y_in, x_in = _endpoint(entry)
+    y_out, x_out = _endpoint(exit_)
 
     dy_mm = (y_out - y_in) * pixel_spacing_mm[0]
     dx_mm = (x_out - x_in) * pixel_spacing_mm[1]

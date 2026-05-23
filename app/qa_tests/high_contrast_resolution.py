@@ -29,8 +29,11 @@ from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
 
 
-def crop_resolution_insert(image: np.ndarray, geom, corner: str) -> np.ndarray:
-    """Return a zoomed crop centered on the UL or LR resolution insert.
+def crop_resolution_insert(
+    image: np.ndarray, geom, corner: str,
+) -> tuple[np.ndarray, tuple[int, int, int, int]]:
+    """Return ``(crop, bbox)`` for a zoomed view of the UL or LR resolution
+    insert. ``bbox`` is ``(y0, y1, x0, x1)`` in image coordinates.
 
     The inserts sit just inside the upper-left and lower-right of the
     phantom, roughly at radius 0.65*r along the diagonals.
@@ -116,7 +119,6 @@ def _detect_resolution_grids(image, geom):
         clusters_abs = list of (col_start, col_end_inclusive) in image coords,
                        one per detected grid (left → right)
     """
-    import numpy as np
     cy, cx, r = geom.cy_px, geom.cx_px, geom.radius_px
     H, W = image.shape
     r0 = max(0, int(cy + 0.20 * r)); r1 = min(H, int(cy + 0.72 * r))
@@ -275,9 +277,10 @@ def run(
                 count_note += f" (cluster count was {cluster_n})"
             if detected_n > spec_n:
                 count_note += f"; spec expects {spec_n}"
-                res.warnings.append(
+                res.add_warning(
                     f"Detected {detected_n} resolution grid(s) but the {spec.short_name} "
-                    f"spec expects {spec_n}. Verify the crop and the selected phantom variant."
+                    f"spec expects {spec_n}. Verify the crop and the selected phantom variant.",
+                    severity="medium",
                 )
             count_note += "."
 
