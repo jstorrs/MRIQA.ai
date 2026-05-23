@@ -1043,13 +1043,7 @@ if tab_manual is not None:
             tid: r for tid, r in st.session_state.results.items()
             if tid not in _VISUAL_TEST_IDS
         }
-        if not automated_results:
-            st.warning(
-                "Automated tests haven't been run yet — go to the **Analysis** "
-                "tab first. You can still score below if you need to, but most "
-                "physicists only do this once the automated tests pass."
-            )
-        elif any(r.status_text() == "FAIL" for r in automated_results.values()):
+        if automated_results and any(r.status_text() == "FAIL" for r in automated_results.values()):
             st.warning(
                 "One or more automated tests **failed**. Manual scoring is "
                 "usually a waste of time on a series with a clear acquisition "
