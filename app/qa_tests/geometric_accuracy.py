@@ -29,17 +29,21 @@ import math
 import numpy as np
 
 from ..io_dicom.dicom_loader import DicomSeries
-from ..utils.geometry import find_phantom_edges_along_line
-from ..utils.phantom import localize_phantom
+from ..utils.geometry import phantom_chord_endpoints
+from ..utils.phantom import PhantomGeometry, localize_phantom
 from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
 
 
-def _measure_length_along(image: np.ndarray, angle_deg: float, pixel_spacing_mm) -> tuple[float, tuple, tuple]:
+def _measure_length_along(
+    image: np.ndarray,
+    geom: PhantomGeometry,
+    angle_deg: float,
+    pixel_spacing_mm,
+) -> tuple[float, tuple, tuple]:
     """Return (length_mm, p_entry_yx, p_exit_yx) for a chord through the
     phantom center at the given angle."""
-    geom = localize_phantom(image)
     cy, cx = geom.cy_px, geom.cx_px
 
     L = max(image.shape) * 1.2
@@ -49,16 +53,7 @@ def _measure_length_along(image: np.ndarray, angle_deg: float, pixel_spacing_mm)
     p0 = (cy - L / 2 * dy, cx - L / 2 * dx)
     p1 = (cy + L / 2 * dy, cx + L / 2 * dx)
 
-    n = 600
-    entry, exit_ = find_phantom_edges_along_line(image, p0, p1, n=n)
-    # find_phantom_edges_along_line returns sub-pixel positions along the
-    # sampled segment; interpolate the (y, x) endpoints rather than rounding
-    # to the nearest sample.
-    def _endpoint(t: float) -> tuple[float, float]:
-        f = t / (n - 1)
-        return p0[0] + (p1[0] - p0[0]) * f, p0[1] + (p1[1] - p0[1]) * f
-    y_in, x_in = _endpoint(entry)
-    y_out, x_out = _endpoint(exit_)
+    (y_in, x_in), (y_out, x_out) = phantom_chord_endpoints(image, p0, p1)
 
     dy_mm = (y_out - y_in) * pixel_spacing_mm[0]
     dx_mm = (x_out - x_in) * pixel_spacing_mm[1]
@@ -82,10 +77,11 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
 
         # ----- Axial slice 1: two diameters -----
         img1 = series.slice(1)
+        geom1 = localize_phantom(img1)
         slice1_dirs = [("Horizontal (L-R)", 0.0), ("Vertical (A-P)", 90.0)]
         s1_endpoints = []
         for label, ang in slice1_dirs:
-            length_mm, pa, pb = _measure_length_along(img1, ang, ps)
+            length_mm, pa, pb = _measure_length_along(img1, geom1, ang, ps)
             res.measurements.append(Measurement(
                 label=f"Slice 1 — {label} diameter",
                 value=round(length_mm, 2),
@@ -108,6 +104,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
 
         # ----- Axial slice 5: four diameters -----
         img5 = series.slice(5)
+        geom5 = localize_phantom(img5)
         slice5_dirs = [
             ("Horizontal (L-R)", 0.0),
             ("Vertical (A-P)",   90.0),
@@ -116,7 +113,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         ]
         s5_endpoints = []
         for label, ang in slice5_dirs:
-            length_mm, pa, pb = _measure_length_along(img5, ang, ps)
+            length_mm, pa, pb = _measure_length_along(img5, geom5, ang, ps)
             res.measurements.append(Measurement(
                 label=f"Slice 5 — {label} diameter",
                 value=round(length_mm, 2),

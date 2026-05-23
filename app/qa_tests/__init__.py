@@ -6,9 +6,6 @@ Two analyses live in this package:
   tests, exposed as ``AXIAL_TEST_ORDER``.
 * **Sagittal localizer analysis** — a single-slice sagittal scout, one test
   (S-I length), exposed as ``SAGITTAL_TEST_ORDER``.
-
-``TEST_ORDER`` remains as an alias for ``AXIAL_TEST_ORDER`` for any older
-callers that imported it.
 """
 
 from .base import TestResult  # re-export
@@ -37,7 +34,3 @@ AXIAL_TEST_ORDER = [
 SAGITTAL_TEST_ORDER = [
     ("localizer_geometric_accuracy", "Geometric Accuracy — Sagittal Localizer", localizer_geometry),
 ]
-
-# Backward-compatible alias — the axial test list was the only one before the
-# sagittal/axial split.
-TEST_ORDER = AXIAL_TEST_ORDER

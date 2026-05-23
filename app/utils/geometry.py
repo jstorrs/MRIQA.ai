@@ -125,3 +125,17 @@ def find_phantom_edges_along_line(image: np.ndarray, p0, p1, n: int = 400) -> tu
         return 0.0, float(n - 1)
     idx = np.where(above)[0]
     return float(idx[0]), float(idx[-1])
+
+
+def phantom_chord_endpoints(
+    image: np.ndarray, p0, p1, n: int = 600,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Return ``((y_in, x_in), (y_out, x_out))`` where a line from ``p0`` to
+    ``p1`` crosses the phantom (sub-pixel half-max edges), interpolated back
+    to image coordinates.
+    """
+    entry, exit_ = find_phantom_edges_along_line(image, p0, p1, n=n)
+    def _at(t: float) -> tuple[float, float]:
+        f = t / (n - 1)
+        return p0[0] + (p1[0] - p0[0]) * f, p0[1] + (p1[1] - p0[1]) * f
+    return _at(entry), _at(exit_)

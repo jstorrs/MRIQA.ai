@@ -15,6 +15,7 @@ from __future__ import annotations
 import numpy as np
 
 from ..io_dicom.dicom_loader import DicomSeries
+from ..utils.geometry import phantom_chord_endpoints
 from ..utils.phantom import localize_phantom
 from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
@@ -49,15 +50,26 @@ def _measure_si_length(localizer: DicomSeries):
         raise ValueError("Phantom not found on localizer.")
     y0, y1 = int(ys.min()), int(ys.max())
     x0, x1 = int(xs.min()), int(xs.max())
+    H, W = img.shape
+    cy_c, cx_c = geom.cy_px, geom.cx_px
 
+    # Measure along a chord through the phantom centroid using sub-pixel
+    # half-max edges (same approach as axial geometric_accuracy), rather
+    # than the mask bounding box. The mask extents are sensitive to single
+    # noisy edge pixels; the half-max chord matches the in-plane diameters.
     if col_is_si:
-        length_mm = (y1 - y0) * ps[0]
-        cx = (x0 + x1) // 2
-        line = ((y0, cx), (y1, cx))
+        L = H * 1.2
+        p0 = (cy_c - L / 2, cx_c)
+        p1 = (cy_c + L / 2, cx_c)
+        (y_in, x_in), (y_out, x_out) = phantom_chord_endpoints(img, p0, p1)
+        length_mm = abs(y_out - y_in) * ps[0]
     else:
-        length_mm = (x1 - x0) * ps[1]
-        cy = (y0 + y1) // 2
-        line = ((cy, x0), (cy, x1))
+        L = W * 1.2
+        p0 = (cy_c, cx_c - L / 2)
+        p1 = (cy_c, cx_c + L / 2)
+        (y_in, x_in), (y_out, x_out) = phantom_chord_endpoints(img, p0, p1)
+        length_mm = abs(x_out - x_in) * ps[1]
+    line = ((y_in, x_in), (y_out, x_out))
 
     return length_mm, img, (y0, y1, x0, x1), line
 
