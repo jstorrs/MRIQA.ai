@@ -101,11 +101,11 @@ LARGE = PhantomSpec(
     slice_thickness_tolerance_mm=0.7,
     # § 4.4 — slice position limits are identical between Large and Medium
     bar_diff_tolerance_mm=5.0,
-    # § Table 1 + § 2.2 — older Large phantoms have three resolution arrays;
-    # newer Large phantoms have four arrays (1.1, 1.0, 0.9, 0.8). We default to
-    # the legacy three-array set so existing phantoms render correctly; sites
-    # with the newer four-array Large phantom can extend this tuple.
-    resolution_array_sizes_mm=(1.1, 1.0, 0.9),
+    # § Table 1 + § 2.2 — older Large phantoms have three resolution arrays
+    # (1.1, 1.0, 0.9); newer Large phantoms add a fourth at 0.8 mm. We default
+    # to the four-array set since it matches current ACR production phantoms;
+    # legacy three-array sites should simply leave the 0.8 mm row unscored.
+    resolution_array_sizes_mm=(1.1, 1.0, 0.9, 0.8),
     # § 2.4 — required minimum resolution is 1.0 mm for both phantoms
     resolution_pass_threshold_mm=1.0,
     # § Table 4 — Large PIU ROI areas and thresholds
