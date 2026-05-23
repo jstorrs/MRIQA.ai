@@ -45,6 +45,11 @@ class SeriesMetadata:
     n_slices: int = 0
     repetition_time_ms: float = 0.0
     echo_time_ms: float = 0.0
+    # When a multi-echo (e.g. double-echo T2) acquisition is uploaded, the
+    # loader keeps only the longest-TE images per ACR Test Guidance § 0.3
+    # ("only the second-echo images are evaluated"). The discarded TE values
+    # are recorded here so validate_series can warn the user about the split.
+    discarded_echo_times_ms: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -158,6 +163,24 @@ def load_series(sources: Iterable) -> DicomSeries:
             tip="This tool is for MRI ACR phantom QA only. Upload an MR series.",
         )
 
+    # Multi-echo split. The ACR T2 series may be acquired as a double-echo
+    # spin echo (TE 20/80) on legacy protocols, in which case the upload will
+    # contain two instances per slice. Per the 2022 ACR Large and Medium
+    # Phantom Test Guidance § 0.3, "When analyzing data from a double-echo
+    # acquisition, only the second-echo images (TE=80) are evaluated." We
+    # generalize: when multiple distinct EchoTime values are present, keep
+    # only the longest-TE group and record the discarded TEs for the UI.
+    echo_groups: dict[float, list[FileDataset]] = {}
+    for ds in datasets:
+        te = round(float(getattr(ds, "EchoTime", 0.0) or 0.0), 1)
+        echo_groups.setdefault(te, []).append(ds)
+
+    discarded_echo_times: list[float] = []
+    if len(echo_groups) > 1:
+        kept_te = max(echo_groups)
+        discarded_echo_times = sorted(te for te in echo_groups if te != kept_te)
+        datasets = echo_groups[kept_te]
+
     # Sort: prefer InstanceNumber; fallback to SliceLocation (descending so
     # superior slices come first, then we reverse if needed).
     def sort_key(ds):
@@ -203,6 +226,7 @@ def load_series(sources: Iterable) -> DicomSeries:
         n_slices=int(volume.shape[0]),
         repetition_time_ms=float(getattr(head, "RepetitionTime", 0.0) or 0.0),
         echo_time_ms=float(getattr(head, "EchoTime", 0.0) or 0.0),
+        discarded_echo_times_ms=list(discarded_echo_times),
     )
     ps = getattr(head, "PixelSpacing", [1.0, 1.0])
     meta.pixel_spacing_mm = (float(ps[0]), float(ps[1]))
@@ -337,6 +361,17 @@ def validate_series(series: DicomSeries) -> list[str]:
         warnings.append(
             f"Could not identify sequence from SeriesDescription "
             f"('{md.series_description}'). Tests assume an ACR T1 or T2 axial series."
+        )
+
+    # Multi-echo series: warn the user what was kept/dropped.
+    if md.discarded_echo_times_ms:
+        kept = md.echo_time_ms
+        dropped_str = ", ".join(f"{te:g} ms" for te in md.discarded_echo_times_ms)
+        warnings.append(
+            "Detected a multi-echo acquisition. Per the 2022 ACR Test Guidance "
+            f"(§ 0.3), only the longest-TE images are evaluated — kept "
+            f"TE = {kept:g} ms, dropped TE = {dropped_str}. If this looks wrong, "
+            "re-export only the desired echo series from the scanner."
         )
 
     # Image orientation: the ACR axial protocol is, well, axial.
