@@ -20,7 +20,7 @@ from scipy import ndimage as ndi
 from skimage.filters import threshold_otsu
 from skimage.measure import label, regionprops
 
-from .phantom_spec import PhantomSpec
+from .phantom_spec import PHANTOMS, PhantomSpec, default_phantom
 
 
 @dataclass
@@ -72,6 +72,27 @@ def localize_phantom(image: np.ndarray, fill_holes: bool = True) -> PhantomGeome
     radius_px = np.sqrt(phantom_region.area / np.pi)
 
     return PhantomGeometry(cx_px=cx, cy_px=cy, radius_px=radius_px, mask=mask)
+
+
+def detect_phantom_spec(
+    image: np.ndarray,
+    pixel_spacing_mm: tuple[float, float],
+    candidates: dict[str, PhantomSpec] | None = None,
+) -> tuple[PhantomSpec, float]:
+    """Pick the phantom spec whose nominal diameter is closest to the diameter
+    measured on `image` (typically ACR slice 1).
+
+    Returns ``(spec, measured_diameter_mm)``. Falls back to ``default_phantom``
+    if segmentation fails.
+    """
+    pool = candidates if candidates is not None else PHANTOMS
+    try:
+        geom = localize_phantom(image)
+        measured_mm = 2.0 * geom.radius_mm(pixel_spacing_mm)
+    except Exception:
+        return default_phantom(), float("nan")
+    best = min(pool.values(), key=lambda s: abs(s.diameter_mm - measured_mm))
+    return best, measured_mm
 
 
 def phantom_quality_warnings(

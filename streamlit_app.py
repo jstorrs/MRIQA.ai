@@ -33,6 +33,7 @@ from app.qa_tests import high_contrast_resolution, low_contrast_detectability  #
 from app.qa_tests.base import TestResult             # noqa: E402
 from app.reporting.csv_report import write_csv       # noqa: E402
 from app.reporting.pdf_report import write_pdf       # noqa: E402
+from app.utils.phantom import detect_phantom_spec    # noqa: E402
 from app.utils.phantom_spec import PHANTOMS, LARGE   # noqa: E402
 
 EXPORTS_DIR = _ROOT / "exports"
@@ -262,14 +263,17 @@ with st.sidebar:
     st.divider()
 
     st.markdown("**Phantom**")
-    _phantom_options = [(s.short_name, s.name) for s in PHANTOMS.values()]
+    _phantom_options = [("auto", "Auto-detect from slice 1")] + [
+        (s.short_name, s.name) for s in PHANTOMS.values()
+    ]
     phantom_choice = st.selectbox(
         "ACR phantom model",
         options=[opt[0] for opt in _phantom_options],
         format_func=lambda k: dict(_phantom_options)[k],
-        index=[i for i, (k, _) in enumerate(_phantom_options) if k == LARGE.short_name][0],
-        help="Selects the geometric and pass/fail thresholds. Large = 190 mm Ø / "
-             "148 mm S-I; Medium = 165 mm Ø / 134 mm S-I.",
+        index=0,
+        help="Auto picks the spec whose nominal diameter is closest to the "
+             "phantom measured on slice 1. Large = 190 mm Ø / 148 mm S-I; "
+             "Medium = 165 mm Ø / 134 mm S-I.",
     )
 
     uploaded = st.file_uploader(
@@ -281,11 +285,18 @@ with st.sidebar:
 
     st.markdown("**Optional: sagittal localizer**")
     _selected_spec = PHANTOMS.get(phantom_choice, LARGE)
-    st.caption(
-        "Upload the sagittal scout to enable the geometric-accuracy "
-        f"superior-inferior length ({_selected_spec.si_length_mm:.0f} mm) check, "
-        "which cannot be measured on an axial slice."
-    )
+    if phantom_choice == "auto":
+        st.caption(
+            "Upload the sagittal scout to enable the geometric-accuracy "
+            "superior-inferior length check (target length depends on the "
+            "auto-detected phantom)."
+        )
+    else:
+        st.caption(
+            "Upload the sagittal scout to enable the geometric-accuracy "
+            f"superior-inferior length ({_selected_spec.si_length_mm:.0f} mm) check, "
+            "which cannot be measured on an axial slice."
+        )
     uploaded_loc = st.file_uploader(
         "Localizer (.zip or .dcm)",
         type=None,
@@ -387,7 +398,23 @@ if series is not None:
     # protocol, recompute via default_acr_slice_map(n_slices, new_spec) here —
     # but only when the user has not customized the mapping in the Slice
     # Mapping tab.
-    series.spec = PHANTOMS.get(phantom_choice, LARGE)
+    if phantom_choice == "auto":
+        idx0 = series.acr_slice_map.get(1, 0)
+        spec_auto, measured_mm = detect_phantom_spec(
+            series.pixel_array[idx0], series.metadata.pixel_spacing_mm,
+        )
+        series.spec = spec_auto
+        if measured_mm == measured_mm:  # not NaN
+            st.sidebar.success(
+                f"Auto-detected **{spec_auto.name}** "
+                f"(measured Ø {measured_mm:.0f} mm vs nominal {spec_auto.diameter_mm:.0f} mm)."
+            )
+        else:
+            st.sidebar.warning(
+                f"Auto-detect could not segment the phantom; falling back to {spec_auto.name}."
+            )
+    else:
+        series.spec = PHANTOMS.get(phantom_choice, LARGE)
     # Apply a manual field-strength override (used for PIU / low-contrast limits)
     # when the DICOM tag is missing or the user wants to force a value.
     if field_choice == "1.5 T":
