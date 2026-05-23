@@ -71,6 +71,13 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         r_small = _radius_for_area_px(small_area, ps)
 
         large_mask = circular_roi_mask(img.shape, geom.cy_px, geom.cx_px, r_large)
+        # The ACR procedure requires the small 1 cm² ROI to be placed *inside*
+        # the large ROI (§ 5 steps 3, 4, 6). Constrain candidate centers to a
+        # tighter disk so the small ROI disk fits fully within the large ROI
+        # boundary — half-pixel-pad so the rasterized circle stays inside.
+        candidate_mask = circular_roi_mask(
+            img.shape, geom.cy_px, geom.cx_px, max(1.0, r_large - r_small - 0.5),
+        )
         # Mean of the small ROI at every center pixel: a uniform circular filter.
         # We approximate the circular small-ROI mean with a square box of equal area.
         # This is the standard interpretation used by many ACR analysers.
@@ -87,9 +94,10 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         air = (img < 0.5 * med).astype(np.float32)
         air_frac = uniform_filter(air, size=box_size)   # fraction of small ROI that is air
 
-        # Candidate centers: large ROI, away from the image edge, no air overlap
+        # Candidate centers: inside the (tightened) large ROI, away from the
+        # image edge, no air overlap.
         margin = int(math.ceil(r_small))
-        ys, xs = np.where(large_mask)
+        ys, xs = np.where(candidate_mask)
         valid = (ys >= margin) & (ys < img.shape[0] - margin) & (xs >= margin) & (xs < img.shape[1] - margin)
         ys, xs = ys[valid], xs[valid]
         af = air_frac[ys, xs]
