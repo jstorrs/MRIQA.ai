@@ -29,7 +29,7 @@ from app.io_dicom.dicom_loader import (              # noqa: E402
     DicomSeries, DicomLoadError, load_series, default_acr_slice_map,
     validate_series,
 )
-from app.qa_tests import TEST_ORDER                  # noqa: E402
+from app.qa_tests import AXIAL_TEST_ORDER, SAGITTAL_TEST_ORDER  # noqa: E402
 from app.qa_tests import high_contrast_resolution, low_contrast_detectability  # noqa: E402
 from app.qa_tests.base import TestResult             # noqa: E402
 from app.reporting.csv_report import write_csv       # noqa: E402
@@ -322,8 +322,9 @@ with st.sidebar:
     )
     st.markdown(
         "<div class='mri-small'>"
-        "Expected input: a single T1 or T2 ACR phantom series — "
-        "11 axial slices, 250&nbsp;mm FOV, 5&nbsp;mm thickness."
+        "The app runs one of two analyses depending on the series you pick:"
+        "<br>• <b>Axial series</b> — 11 axial slices (T1 or T2 ACR protocol)."
+        "<br>• <b>Sagittal localizer</b> — single sagittal scout image."
         "</div>",
         unsafe_allow_html=True,
     )
@@ -347,29 +348,9 @@ with st.sidebar:
         "Drop a .zip of the series, or select .dcm files",
         type=None,
         accept_multiple_files=True,
-        help="Accepts a folder zip or individual .dcm files.",
-    )
-
-    st.markdown("**Optional: sagittal localizer**")
-    _selected_spec = PHANTOMS.get(phantom_choice, LARGE)
-    if phantom_choice == "auto":
-        st.caption(
-            "Upload the sagittal scout to enable the geometric-accuracy "
-            "superior-inferior length check (target length depends on the "
-            "auto-detected phantom)."
-        )
-    else:
-        st.caption(
-            "Upload the sagittal scout to enable the geometric-accuracy "
-            f"superior-inferior length ({_selected_spec.si_length_mm:.0f} mm) check, "
-            "which cannot be measured on an axial slice."
-        )
-    uploaded_loc = st.file_uploader(
-        "Localizer (.zip or .dcm)",
-        type=None,
-        accept_multiple_files=True,
-        key="loc_uploader",
-        help="The sagittal localizer/scout series.",
+        help="Accepts a folder zip or individual .dcm files. The series picker "
+             "shows everything found in the upload — pick the axial protocol "
+             "for the full QA or the sagittal scout for the S-I length check.",
     )
 
     st.markdown("**Scanner field strength**")
@@ -391,10 +372,9 @@ with st.sidebar:
     if st.session_state.get("series") is not None:
         st.divider()
         if st.button("Reset / load a new series", use_container_width=True):
-            for k in ("series", "results", "localizer", "series_warnings",
+            for k in ("series", "results", "series_warnings",
                       "view_wl", "view_ww",
-                      "upload_catalog", "selected_series_uid", "loaded_series_uid",
-                      "loc_upload_catalog", "selected_loc_uid", "loaded_loc_uid"):
+                      "upload_catalog", "selected_series_uid", "loaded_series_uid"):
                 st.session_state.pop(k, None)
             st.rerun()
 
@@ -415,8 +395,6 @@ if "validation_log" not in st.session_state:
     st.session_state.validation_log = []    # list[dict]
 if "series_warnings" not in st.session_state:
     st.session_state.series_warnings = []   # non-fatal warnings from validate_series
-if "localizer" not in st.session_state:
-    st.session_state.localizer = None       # optional sagittal localizer series
 
 series: DicomSeries | None = st.session_state.series
 
@@ -489,56 +467,14 @@ elif uploaded:
     except Exception as exc:
         _show_load_error(exc)
 
-# Optional localizer (loaded independently; attached to the main series below)
-if uploaded_loc:
-    try:
-        loc_sig = _uploads_signature(uploaded_loc)
-        loc_cache = st.session_state.get("loc_upload_catalog")
-        if not loc_cache or loc_cache.get("sig") != loc_sig:
-            loc_catalog = _catalog_uploads(uploaded_loc)
-            st.session_state.loc_upload_catalog = {"sig": loc_sig, "entries": loc_catalog}
-            st.session_state.pop("selected_loc_uid", None)
-        else:
-            loc_catalog = loc_cache["entries"]
-        if not loc_catalog:
-            st.sidebar.warning("No DICOMs found in the localizer upload.")
-            st.session_state.localizer = None
-        else:
-            if len(loc_catalog) > 1:
-                loc_options = [e["uid"] for e in loc_catalog]
-                loc_labels = {e["uid"]: _series_label(e) for e in loc_catalog}
-                loc_default = 0
-                if st.session_state.get("selected_loc_uid") in loc_options:
-                    loc_default = loc_options.index(
-                        st.session_state["selected_loc_uid"])
-                chosen_loc_uid = st.sidebar.selectbox(
-                    f"Localizer series ({len(loc_catalog)} found)",
-                    options=loc_options,
-                    format_func=lambda u: loc_labels[u],
-                    index=loc_default,
-                    key="selected_loc_uid",
-                )
-            else:
-                chosen_loc_uid = loc_catalog[0]["uid"]
-                st.session_state["selected_loc_uid"] = chosen_loc_uid
-            chosen_loc = next(e for e in loc_catalog if e["uid"] == chosen_loc_uid)
-            if st.session_state.get("loaded_loc_uid") != chosen_loc_uid:
-                st.session_state.localizer = load_series(chosen_loc["sources"])
-                st.session_state.loaded_loc_uid = chosen_loc_uid
-    except Exception as exc:
-        st.sidebar.warning(f"Could not load localizer: {exc}")
-        st.session_state.localizer = None
-
-# Attach the localizer to the active series so geometric accuracy can use it
+# Apply the selected phantom spec to the active series
 if series is not None:
-    series.localizer = st.session_state.get("localizer")
-    # Apply the selected phantom spec. Loader attaches LARGE by default; this
-    # lets the user pick Medium without having to re-upload. Note: Large and
-    # Medium share the same 11-slice ACR mapping, so series.acr_slice_map does
-    # not need to be recomputed. If a future spec introduces a different
-    # protocol, recompute via default_acr_slice_map(n_slices, new_spec) here —
-    # but only when the user has not customized the mapping in the Slice
-    # Mapping tab.
+    # Loader attaches LARGE by default; this lets the user pick Medium without
+    # having to re-upload. Note: Large and Medium share the same 11-slice ACR
+    # mapping, so series.acr_slice_map does not need to be recomputed. If a
+    # future spec introduces a different protocol, recompute via
+    # default_acr_slice_map(n_slices, new_spec) here — but only when the user
+    # has not customized the mapping in the Slice Mapping tab.
     if phantom_choice == "auto":
         idx0 = series.acr_slice_map.get(1, 0)
         spec_auto, measured_mm = detect_phantom_spec(
@@ -575,19 +511,20 @@ if series is None:
         st.markdown("### 1. Upload")
         st.markdown(
             "Drop a zipped ACR phantom series (or individual `.dcm` files) "
-            "into the sidebar. Both T1 and T2 series work."
+            "into the sidebar. Both T1/T2 axial series and sagittal scouts work."
         )
     with c2:
-        st.markdown("### 2. Confirm")
+        st.markdown("### 2. Pick a series")
         st.markdown(
-            "Auto-detected ACR slice roles (1, 5, 7, 11) are shown so you can "
-            "verify or override them before analysis."
+            "The app picks the analysis from the series you choose:"
+            " **11-slice axial** runs the full ACR protocol; a"
+            " **single sagittal image** runs the S-I length check."
         )
     with c3:
         st.markdown("### 3. Run + Report")
         st.markdown(
-            "Five ACR tests run automatically; two are visual scoring tests "
-            "with zoom-in views. Export a PDF + CSV when done."
+            "Axial runs five automated tests plus two visual scoring tests; "
+            "sagittal runs one automated test. Export a PDF + CSV when done."
         )
 
     st.divider()
@@ -619,6 +556,39 @@ if series is None:
 md = series.metadata
 
 # --------------------------------------------------------------------------- #
+# Analysis mode (axial protocol vs sagittal localizer)                        #
+# --------------------------------------------------------------------------- #
+# A single-image series is treated as the sagittal-localizer S-I length
+# analysis. Anything multi-slice runs the full axial protocol (the loader will
+# already have warned on short series via validate_series).
+analysis_mode = "sagittal" if md.n_slices == 1 else "axial"
+test_order = SAGITTAL_TEST_ORDER if analysis_mode == "sagittal" else AXIAL_TEST_ORDER
+
+# Clear results when switching analyses inside the same session (e.g. user
+# picks a different series in the catalog and the mode flips).
+if st.session_state.get("active_mode") != analysis_mode:
+    st.session_state.results = {}
+    st.session_state.pop("_visual_hcr_cache", None)
+    st.session_state.pop("_visual_lcd_cache", None)
+    st.session_state.active_mode = analysis_mode
+
+if analysis_mode == "sagittal":
+    st.markdown(
+        "<div class='mri-banner mri-banner-dash'>"
+        "<b>Sagittal localizer analysis</b> — single-image S-I length check."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+else:
+    st.markdown(
+        "<div class='mri-banner mri-banner-dash'>"
+        f"<b>Axial series analysis</b> — {len(AXIAL_TEST_ORDER)}-test ACR protocol "
+        f"({md.n_slices} slices loaded)."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+# --------------------------------------------------------------------------- #
 # Metadata strip                                                              #
 # --------------------------------------------------------------------------- #
 
@@ -637,7 +607,9 @@ st.caption(
 )
 
 # Non-fatal series warnings (wrong slice count, missing tags, etc.)
-if st.session_state.series_warnings:
+# Sagittal-localizer mode is single-image by design — suppress the "expected
+# 11 slices" warning so it isn't shown as an error.
+if st.session_state.series_warnings and analysis_mode == "axial":
     with st.expander(f"⚠️  Series warnings ({len(st.session_state.series_warnings)})",
                      expanded=True):
         for w in st.session_state.series_warnings:
@@ -647,9 +619,15 @@ if st.session_state.series_warnings:
 # Tabs                                                                        #
 # --------------------------------------------------------------------------- #
 
-tab_viewer, tab_slices, tab_run, tab_results, tab_history, tab_validation, tab_export = st.tabs(
-    ["Viewer", "Slice mapping", "Run QA", "Results", "History", "Validation", "Export"]
-)
+if analysis_mode == "axial":
+    tab_viewer, tab_slices, tab_run, tab_results, tab_history, tab_validation, tab_export = st.tabs(
+        ["Viewer", "Slice mapping", "Run QA", "Results", "History", "Validation", "Export"]
+    )
+else:
+    tab_viewer, tab_run, tab_results, tab_history, tab_validation, tab_export = st.tabs(
+        ["Viewer", "Run QA", "Results", "History", "Validation", "Export"]
+    )
+    tab_slices = None
 
 # ----- Viewer ----------------------------------------------------------- #
 with tab_viewer:
@@ -688,142 +666,162 @@ with tab_viewer:
     img = _normalize_img(vol[idx - 1], wl=st.session_state.view_wl, ww=st.session_state.view_ww)
     st.image(img, caption=f"Slice {idx} of {n}", width=560)
 
-# ----- Slice mapping ---------------------------------------------------- #
-with tab_slices:
-    st.subheader("ACR slice role mapping")
-    st.write(
-        "ACR procedures reference **slice 1** (bars/wedges), **5** (central), "
-        "**7** (uniform region), and **11** (superior wedges). Auto-mapping uses "
-        "InstanceNumber. Override below if your series is non-standard."
-    )
-    default = default_acr_slice_map(md.n_slices)
-    cols = st.columns(4)
-    new_map = {}
-    for col, role in zip(cols, [1, 5, 7, 11]):
-        with col:
-            cur = series.acr_slice_map.get(role, default.get(role, 0))
-            v = st.number_input(
-                f"ACR slice {role} → physical index",
-                min_value=1, max_value=max(1, md.n_slices),
-                value=min(int(cur) + 1, md.n_slices), step=1,
-            )
-            new_map[role] = int(v) - 1
-            preview = _normalize_img(series.pixel_array[int(v) - 1])
-            st.image(preview, caption=f"Physical slice {int(v)}", width=180)
+# ----- Slice mapping (axial only) -------------------------------------- #
+if tab_slices is not None:
+    with tab_slices:
+        st.subheader("ACR slice role mapping")
+        st.write(
+            "ACR procedures reference **slice 1** (bars/wedges), **5** (central), "
+            "**7** (uniform region), and **11** (superior wedges). Auto-mapping uses "
+            "InstanceNumber. Override below if your series is non-standard."
+        )
+        default = default_acr_slice_map(md.n_slices)
+        cols = st.columns(4)
+        new_map = {}
+        for col, role in zip(cols, [1, 5, 7, 11]):
+            with col:
+                cur = series.acr_slice_map.get(role, default.get(role, 0))
+                v = st.number_input(
+                    f"ACR slice {role} → physical index",
+                    min_value=1, max_value=max(1, md.n_slices),
+                    value=min(int(cur) + 1, md.n_slices), step=1,
+                )
+                new_map[role] = int(v) - 1
+                preview = _normalize_img(series.pixel_array[int(v) - 1])
+                st.image(preview, caption=f"Physical slice {int(v)}", width=180)
 
-    if len(set(new_map.values())) < 4:
-        st.warning("Two or more ACR roles are mapped to the same physical slice. "
-                   "This is unusual — confirm before running QA.")
+        if len(set(new_map.values())) < 4:
+            st.warning("Two or more ACR roles are mapped to the same physical slice. "
+                       "This is unusual — confirm before running QA.")
 
-    series.acr_slice_map = {**series.acr_slice_map, **new_map}
-    st.session_state.series = series
+        series.acr_slice_map = {**series.acr_slice_map, **new_map}
+        st.session_state.series = series
 
 # ----- Run QA ----------------------------------------------------------- #
 with tab_run:
-    st.subheader("Run ACR QA tests")
-    st.write(
-        "Five automated tests run server-side. Two visual tests "
-        "(high-contrast resolution, low-contrast detectability) need your input."
-    )
-
-    if st.button("Run all automated tests", type="primary"):
-        results: dict[str, TestResult] = dict(st.session_state.results)
-        prog = st.progress(0, text="Running QA...")
-        for i, (tid, label, mod) in enumerate(TEST_ORDER):
-            prog.progress((i + 1) / len(TEST_ORDER), text=f"Running {label}...")
-            is_user_test = mod in (high_contrast_resolution, low_contrast_detectability)
-            try:
-                if is_user_test and tid in results and results[tid].measurements:
-                    continue
-                res = mod.run(series, spec=series.spec)
-            except Exception as e:
-                res = TestResult(test_id=tid, test_name=label, automated=not is_user_test,
-                                 passed=None, error=str(e))
-            results[tid] = res
-        st.session_state.results = results
-        prog.empty()
-        st.success("Done. Open the **Results** tab.")
-
-    st.info(
-        "**Two tests are scored visually by you** — High-Contrast Spatial Resolution "
-        "and Low-Contrast Object Detectability. The ACR manual defines these as visual "
-        "(human-judged) tests, so the app shows you the correctly-located images and you "
-        "enter what you see below. **They stay at status REVIEW until you score and save — "
-        "that's expected, not an error or failure.**"
-    )
-
-    st.markdown("### Visual scoring — high-contrast resolution")
-    st.caption("On slice 1, look at the UL and LR hole arrays in the zoomed crops below.")
-    _series_key = id(series)
-    _hcr_existing = st.session_state.results.get("high_contrast_resolution")
-    if _hcr_existing is not None and _hcr_existing.annotated_images:
-        _hcr_images = _hcr_existing.annotated_images
-    else:
-        _hcr_cache = st.session_state.get("_visual_hcr_cache")
-        if _hcr_cache is None or _hcr_cache[0] != _series_key:
-            _hcr_images = high_contrast_resolution.run(series, spec=series.spec).annotated_images
-            st.session_state["_visual_hcr_cache"] = (_series_key, _hcr_images)
-        else:
-            _hcr_images = _hcr_cache[1]
-    for _cap, _im in _hcr_images:
-        st.image(_im, caption=_cap, width="stretch")
-    res_sizes = list(series.spec.resolution_array_sizes_mm)
-    res_default_idx = (
-        res_sizes.index(series.spec.resolution_pass_threshold_mm)
-        if series.spec.resolution_pass_threshold_mm in res_sizes
-        else len(res_sizes) // 2
-    )
-    cspec, cul, clr = st.columns(3)
-    threshold = cspec.selectbox("Required smallest row (mm)", res_sizes, index=res_default_idx)
-    ul = cul.selectbox("UL smallest resolvable",
-                       [None, *res_sizes],
-                       format_func=lambda x: "—" if x is None else f"{x} mm")
-    lr = clr.selectbox("LR smallest resolvable",
-                       [None, *res_sizes],
-                       format_func=lambda x: "—" if x is None else f"{x} mm")
-    if st.button("Save resolution scoring"):
-        res = high_contrast_resolution.run(
-            series, spec=series.spec,
-            user_input={"UL": ul, "LR": lr, "spec": threshold},
+    if analysis_mode == "sagittal":
+        st.subheader("Run sagittal-localizer QA")
+        st.write(
+            f"Measures the phantom's superior-inferior length on the sagittal "
+            f"scout against the spec nominal "
+            f"({series.spec.si_length_mm:.0f} mm ± {series.spec.length_tolerance_mm:.0f} mm)."
         )
-        st.session_state.results["high_contrast_resolution"] = res
-        st.success("Saved.")
-
-    lcd_slices = series.spec.lcd_slices
-    lcd_range_label = f"{lcd_slices[0]}–{lcd_slices[-1]}"
-    st.markdown("### Visual scoring — low-contrast object detectability")
-    st.caption(f"Count complete spokes visible on each of slices {lcd_range_label}.")
-    _lcd_existing = st.session_state.results.get("low_contrast_detectability")
-    if _lcd_existing is not None and _lcd_existing.annotated_images:
-        _lcd_images = _lcd_existing.annotated_images
+        if st.button("Run S-I length test", type="primary"):
+            results: dict[str, TestResult] = dict(st.session_state.results)
+            for tid, label, mod in test_order:
+                try:
+                    res = mod.run(series, spec=series.spec)
+                except Exception as e:
+                    res = TestResult(test_id=tid, test_name=label, automated=True,
+                                     passed=None, error=str(e))
+                results[tid] = res
+            st.session_state.results = results
+            st.success("Done. Open the **Results** tab.")
     else:
-        _lcd_cache = st.session_state.get("_visual_lcd_cache")
-        if _lcd_cache is None or _lcd_cache[0] != _series_key:
-            _lcd_images = low_contrast_detectability.run(series, spec=series.spec).annotated_images
-            st.session_state["_visual_lcd_cache"] = (_series_key, _lcd_images)
-        else:
-            _lcd_images = _lcd_cache[1]
-    if _lcd_images:
-        _img_cols = st.columns(min(len(_lcd_images), 4))
-        for i, (_cap, _im) in enumerate(_lcd_images):
-            with _img_cols[i % len(_img_cols)]:
-                st.image(_im, caption=_cap, width="stretch")
-    with st.form("lcd_scoring_form", clear_on_submit=False):
-        cs = st.columns(len(lcd_slices))
-        spoke_counts: dict[int, int] = {}
-        for col, s in zip(cs, lcd_slices):
-            with col:
-                spoke_counts[s] = st.number_input(
-                    f"Slice {s} spokes", min_value=0, max_value=10, value=0, step=1,
-                    key=f"lcd_spokes_{s}",
-                )
-        _lcd_submitted = st.form_submit_button("Save LCD scoring")
-    if _lcd_submitted:
-        res = low_contrast_detectability.run(
-            series, spec=series.spec, user_input=spoke_counts,
+        st.subheader("Run ACR QA tests")
+        st.write(
+            "Five automated tests run server-side. Two visual tests "
+            "(high-contrast resolution, low-contrast detectability) need your input."
         )
-        st.session_state.results["low_contrast_detectability"] = res
-        st.success("Saved.")
+
+        if st.button("Run all automated tests", type="primary"):
+            results: dict[str, TestResult] = dict(st.session_state.results)
+            prog = st.progress(0, text="Running QA...")
+            for i, (tid, label, mod) in enumerate(test_order):
+                prog.progress((i + 1) / len(test_order), text=f"Running {label}...")
+                is_user_test = mod in (high_contrast_resolution, low_contrast_detectability)
+                try:
+                    if is_user_test and tid in results and results[tid].measurements:
+                        continue
+                    res = mod.run(series, spec=series.spec)
+                except Exception as e:
+                    res = TestResult(test_id=tid, test_name=label, automated=not is_user_test,
+                                     passed=None, error=str(e))
+                results[tid] = res
+            st.session_state.results = results
+            prog.empty()
+            st.success("Done. Open the **Results** tab.")
+
+        st.info(
+            "**Two tests are scored visually by you** — High-Contrast Spatial Resolution "
+            "and Low-Contrast Object Detectability. The ACR manual defines these as visual "
+            "(human-judged) tests, so the app shows you the correctly-located images and you "
+            "enter what you see below. **They stay at status REVIEW until you score and save — "
+            "that's expected, not an error or failure.**"
+        )
+
+        st.markdown("### Visual scoring — high-contrast resolution")
+        st.caption("On slice 1, look at the UL and LR hole arrays in the zoomed crops below.")
+        _series_key = id(series)
+        _hcr_existing = st.session_state.results.get("high_contrast_resolution")
+        if _hcr_existing is not None and _hcr_existing.annotated_images:
+            _hcr_images = _hcr_existing.annotated_images
+        else:
+            _hcr_cache = st.session_state.get("_visual_hcr_cache")
+            if _hcr_cache is None or _hcr_cache[0] != _series_key:
+                _hcr_images = high_contrast_resolution.run(series, spec=series.spec).annotated_images
+                st.session_state["_visual_hcr_cache"] = (_series_key, _hcr_images)
+            else:
+                _hcr_images = _hcr_cache[1]
+        for _cap, _im in _hcr_images:
+            st.image(_im, caption=_cap, width="stretch")
+        res_sizes = list(series.spec.resolution_array_sizes_mm)
+        res_default_idx = (
+            res_sizes.index(series.spec.resolution_pass_threshold_mm)
+            if series.spec.resolution_pass_threshold_mm in res_sizes
+            else len(res_sizes) // 2
+        )
+        cspec, cul, clr = st.columns(3)
+        threshold = cspec.selectbox("Required smallest row (mm)", res_sizes, index=res_default_idx)
+        ul = cul.selectbox("UL smallest resolvable",
+                           [None, *res_sizes],
+                           format_func=lambda x: "—" if x is None else f"{x} mm")
+        lr = clr.selectbox("LR smallest resolvable",
+                           [None, *res_sizes],
+                           format_func=lambda x: "—" if x is None else f"{x} mm")
+        if st.button("Save resolution scoring"):
+            res = high_contrast_resolution.run(
+                series, spec=series.spec,
+                user_input={"UL": ul, "LR": lr, "spec": threshold},
+            )
+            st.session_state.results["high_contrast_resolution"] = res
+            st.success("Saved.")
+
+        lcd_slices = series.spec.lcd_slices
+        lcd_range_label = f"{lcd_slices[0]}–{lcd_slices[-1]}"
+        st.markdown("### Visual scoring — low-contrast object detectability")
+        st.caption(f"Count complete spokes visible on each of slices {lcd_range_label}.")
+        _lcd_existing = st.session_state.results.get("low_contrast_detectability")
+        if _lcd_existing is not None and _lcd_existing.annotated_images:
+            _lcd_images = _lcd_existing.annotated_images
+        else:
+            _lcd_cache = st.session_state.get("_visual_lcd_cache")
+            if _lcd_cache is None or _lcd_cache[0] != _series_key:
+                _lcd_images = low_contrast_detectability.run(series, spec=series.spec).annotated_images
+                st.session_state["_visual_lcd_cache"] = (_series_key, _lcd_images)
+            else:
+                _lcd_images = _lcd_cache[1]
+        if _lcd_images:
+            _img_cols = st.columns(min(len(_lcd_images), 4))
+            for i, (_cap, _im) in enumerate(_lcd_images):
+                with _img_cols[i % len(_img_cols)]:
+                    st.image(_im, caption=_cap, width="stretch")
+        with st.form("lcd_scoring_form", clear_on_submit=False):
+            cs = st.columns(len(lcd_slices))
+            spoke_counts: dict[int, int] = {}
+            for col, s in zip(cs, lcd_slices):
+                with col:
+                    spoke_counts[s] = st.number_input(
+                        f"Slice {s} spokes", min_value=0, max_value=10, value=0, step=1,
+                        key=f"lcd_spokes_{s}",
+                    )
+            _lcd_submitted = st.form_submit_button("Save LCD scoring")
+        if _lcd_submitted:
+            res = low_contrast_detectability.run(
+                series, spec=series.spec, user_input=spoke_counts,
+            )
+            st.session_state.results["low_contrast_detectability"] = res
+            st.success("Saved.")
 
 # ----- Results ---------------------------------------------------------- #
 with tab_results:
@@ -853,7 +851,7 @@ with tab_results:
 
         # ---- Summary table -----
         rows = []
-        for tid, _, _ in TEST_ORDER:
+        for tid, _, _ in test_order:
             r: TestResult | None = st.session_state.results.get(tid)
             if r is None:
                 rows.append({"Test": tid, "Status": "—", "Confidence": "—", "Detail": ""})
@@ -871,7 +869,7 @@ with tab_results:
         st.dataframe(rows, hide_index=True, use_container_width=True)
 
         st.markdown("### Per-test details")
-        for tid, label, _ in TEST_ORDER:
+        for tid, label, _ in test_order:
             r: TestResult | None = st.session_state.results.get(tid)
             if r is None:
                 continue
@@ -956,13 +954,20 @@ with tab_validation:
     st.markdown("### Per-dataset testing checklist")
     cols = st.columns(2)
     with cols[0]:
-        st.markdown(
-            "- Upload one anonymized ACR phantom series\n"
-            "- Confirm metadata strip matches the scanner/series you expected\n"
-            "- Review **Series warnings** (if any)\n"
-            "- Confirm Slice Mapping looks right on the visual previews\n"
-            "- Run all automated tests"
-        )
+        if analysis_mode == "axial":
+            st.markdown(
+                "- Upload one anonymized ACR axial phantom series\n"
+                "- Confirm metadata strip matches the scanner/series you expected\n"
+                "- Review **Series warnings** (if any)\n"
+                "- Confirm Slice Mapping looks right on the visual previews\n"
+                "- Run all automated tests"
+            )
+        else:
+            st.markdown(
+                "- Upload one anonymized ACR sagittal localizer image\n"
+                "- Confirm metadata strip matches the scanner/series you expected\n"
+                "- Run the S-I length test"
+            )
     with cols[1]:
         st.markdown(
             "- For every test, **open its overlay image** and verify the ROIs land correctly\n"
@@ -1000,19 +1005,24 @@ with tab_validation:
 
         manual: dict[str, str] = {}
         manual_cols = st.columns(3)
-        manual_fields = [
-            ("geo_slice1",       "Geometric accuracy slice 1 (mm)"),
-            ("geo_slice5_h",     "Geometric accuracy slice 5 horizontal (mm)"),
-            ("geo_slice5_v",     "Geometric accuracy slice 5 vertical (mm)"),
-            ("slice_thickness",  "Slice thickness (mm)"),
-            ("slice_position_1", "Slice position Δ slice 1 (mm)"),
-            ("slice_position_11","Slice position Δ slice 11 (mm)"),
-            ("piu",              "PIU (%)"),
-            ("psg",              "PSG (%)"),
-            ("res_ul",           "High-contrast UL smallest resolvable (mm)"),
-            ("res_lr",           "High-contrast LR smallest resolvable (mm)"),
-            ("lcd_total",        "Low-contrast total spokes seen"),
-        ]
+        if analysis_mode == "sagittal":
+            manual_fields = [
+                ("si_length", "Superior-inferior length (mm)"),
+            ]
+        else:
+            manual_fields = [
+                ("geo_slice1",       "Geometric accuracy slice 1 (mm)"),
+                ("geo_slice5_h",     "Geometric accuracy slice 5 horizontal (mm)"),
+                ("geo_slice5_v",     "Geometric accuracy slice 5 vertical (mm)"),
+                ("slice_thickness",  "Slice thickness (mm)"),
+                ("slice_position_1", "Slice position Δ slice 1 (mm)"),
+                ("slice_position_11","Slice position Δ slice 11 (mm)"),
+                ("piu",              "PIU (%)"),
+                ("psg",              "PSG (%)"),
+                ("res_ul",           "High-contrast UL smallest resolvable (mm)"),
+                ("res_lr",           "High-contrast LR smallest resolvable (mm)"),
+                ("lcd_total",        "Low-contrast total spokes seen"),
+            ]
         for i, (k, label) in enumerate(manual_fields):
             manual[k] = manual_cols[i % 3].text_input(label, value="")
 
@@ -1037,7 +1047,8 @@ with tab_validation:
                 "error_count":     counts["ERROR"],
             }
             # Flatten per-test result + manual side-by-side
-            for tid, _, _ in TEST_ORDER:
+            row["analysis_mode"] = analysis_mode
+            for tid, _, _ in test_order:
                 r = st.session_state.results.get(tid)
                 if r is None:
                     continue
@@ -1111,7 +1122,7 @@ with tab_export:
         stamp = f"{md.patient_id or 'phantom'}_{md.series_description or 'series'}_{ts}".replace(" ", "_")
         pdf_path = EXPORTS_DIR / f"QAreport_{stamp}.pdf"
         csv_path = EXPORTS_DIR / f"QAreport_{stamp}.csv"
-        results_list = [st.session_state.results[t[0]] for t in TEST_ORDER if t[0] in st.session_state.results]
+        results_list = [st.session_state.results[t[0]] for t in test_order if t[0] in st.session_state.results]
 
         cgen, _ = st.columns([1, 3])
         if cgen.button("Generate PDF + CSV", type="primary"):

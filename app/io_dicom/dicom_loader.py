@@ -61,9 +61,6 @@ class DicomSeries:
     datasets: list[FileDataset] = field(default_factory=list, repr=False)
     # Mapping from "ACR slice role" (e.g. 1, 5, 7, 11) -> physical slice index 0..n-1
     acr_slice_map: dict[int, int] = field(default_factory=dict)
-    # Optional sagittal localizer series, attached for the geometric-accuracy
-    # S-I length (nominal per spec) measurement which cannot be done on an axial slice.
-    localizer: "DicomSeries | None" = field(default=None, repr=False)
     # Phantom model (Large, Medium, …) — every QA test reads spec from here so
     # geometry/threshold constants are not hardcoded per test.
     spec: PhantomSpec = field(default_factory=default_phantom)

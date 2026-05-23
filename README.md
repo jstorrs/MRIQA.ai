@@ -98,15 +98,27 @@ All thresholds come from the **ACR Large and Medium Phantom Test Guidance (Oct 2
 
 Defaults below are for the **Large** phantom; **Medium** thresholds are tighter where the doc specifies (e.g. ±2 mm geometric tolerance, PIU ≥ 85 % at 3 T).
 
+The app runs one of two analyses depending on the series picked: the
+**axial series analysis** (11-slice ACR protocol, the seven tests below) or
+the **sagittal localizer analysis** (single sagittal image, S-I length only).
+
+**Axial series analysis**
+
 | # | Test                              | Automation        | Slice    | Large-phantom threshold                                       |
 |---|-----------------------------------|-------------------|----------|---------------------------------------------------------------|
-| 1 | Geometric Accuracy                | Automated         | 1, 5     | 190 mm ± 3 mm (axial); 148 mm ± 3 mm (S-I on localizer)       |
+| 1 | Geometric Accuracy (axial)        | Automated         | 1, 5     | 190 mm ± 3 mm diameters                                       |
 | 2 | High-Contrast Spatial Resolution  | User confirmation | 1        | 1.0 mm row resolvable in UL and LR (configurable)             |
 | 3 | Slice Thickness Accuracy          | Automated         | 1        | 5.0 mm ± 0.7 mm                                               |
 | 4 | Slice Position Accuracy           | Automated         | 1, 11    | \|bar offset\| ≤ 5 mm                                         |
 | 5 | Image Intensity Uniformity (PIU)  | Automated         | 7        | ≥ 87.5 % at < 3 T; ≥ 82 % at 3 T                              |
 | 6 | Percent Signal Ghosting (PSG)     | Automated         | 7        | ≤ 3.0 %                                                       |
 | 7 | Low-Contrast Object Detectability | User confirmation | 8–11     | ≥ 37 total spokes at 3 T; ≥ 30 at 1.5 T (ACR-T1)              |
+
+**Sagittal localizer analysis**
+
+| # | Test                                          | Automation | Image       | Large-phantom threshold |
+|---|-----------------------------------------------|------------|-------------|-------------------------|
+| 1 | Geometric Accuracy — Sagittal (S-I length)    | Automated  | single scout| 148 mm ± 3 mm           |
 
 ---
 

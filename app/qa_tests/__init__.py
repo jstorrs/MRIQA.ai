@@ -1,4 +1,15 @@
-"""Registry of QA tests so the UI and report can iterate them in order."""
+"""Registry of QA tests so the UI and report can iterate them in order.
+
+Two analyses live in this package:
+
+* **Axial series analysis** — the full ACR axial protocol (11 slices), seven
+  tests, exposed as ``AXIAL_TEST_ORDER``.
+* **Sagittal localizer analysis** — a single-slice sagittal scout, one test
+  (S-I length), exposed as ``SAGITTAL_TEST_ORDER``.
+
+``TEST_ORDER`` remains as an alias for ``AXIAL_TEST_ORDER`` for any older
+callers that imported it.
+"""
 
 from .base import TestResult  # re-export
 from . import (
@@ -9,10 +20,11 @@ from . import (
     uniformity,
     ghosting,
     low_contrast_detectability,
+    localizer_geometry,
 )
 
 # Ordered list of (id, label, module). The module must expose a `run(series, ...)` function.
-TEST_ORDER = [
+AXIAL_TEST_ORDER = [
     ("geometric_accuracy", "Geometric Accuracy", geometric_accuracy),
     ("high_contrast_resolution", "High-Contrast Spatial Resolution", high_contrast_resolution),
     ("slice_thickness", "Slice Thickness Accuracy", slice_thickness),
@@ -21,3 +33,11 @@ TEST_ORDER = [
     ("ghosting", "Percent Signal Ghosting (PSG)", ghosting),
     ("low_contrast_detectability", "Low-Contrast Object Detectability", low_contrast_detectability),
 ]
+
+SAGITTAL_TEST_ORDER = [
+    ("localizer_geometric_accuracy", "Geometric Accuracy — Sagittal Localizer", localizer_geometry),
+]
+
+# Backward-compatible alias — the axial test list was the only one before the
+# sagittal/axial split.
+TEST_ORDER = AXIAL_TEST_ORDER
