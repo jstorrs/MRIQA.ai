@@ -23,12 +23,37 @@ The limits are identical for Large and Medium phantoms.
 from __future__ import annotations
 
 import numpy as np
+from skimage.filters import threshold_otsu
+from skimage.measure import label, regionprops
 
 from ..io_dicom.dicom_loader import DicomSeries
 from ..utils.phantom import localize_phantom
 from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
+
+
+def _lcd_chamber_center(img: np.ndarray, phantom_mask: np.ndarray) -> tuple[float, float] | None:
+    """Centroid of the LCD insert chamber on an axial slice.
+
+    The phantom mask centroid is not always a good crop target — on the
+    ACR Large/Medium phantoms there is enough bright asymmetric structure
+    (fiducials, grid markers) to shift the area centroid above the actual
+    LCD pattern. Inside the phantom mask the LCD insert is the largest
+    dark connected component; its centroid is the right anchor for the
+    spokes view.
+    """
+    try:
+        t = threshold_otsu(img)
+    except Exception:
+        return None
+    dark_interior = (img < t) & phantom_mask
+    lbl = label(dark_interior)
+    if lbl.max() == 0:
+        return None
+    biggest = max(regionprops(lbl), key=lambda r: r.area)
+    cy, cx = biggest.centroid
+    return float(cy), float(cx)
 
 
 def run(
@@ -58,14 +83,27 @@ def run(
                 continue
             img = series.pixel_array[idx].astype(np.float32)
             geom = localize_phantom(img)
-            # Zoom onto the central low-contrast disk pattern (the spokes occupy
-            # roughly the central 0.7R) so the faint disks are easier to count.
+            # Zoom onto the central low-contrast disk pattern. The spoke
+            # insert is the same physical size in the Large and Medium
+            # phantoms, so anchor the crop to a fixed mm half-width from the
+            # spec rather than scaling with phantom radius. Center on the LCD
+            # chamber itself (largest dark region inside the phantom) rather
+            # than the phantom centroid — asymmetric bright structure on the
+            # phantom (fiducials, grid markers) pulls the area centroid above
+            # the actual LCD pattern.
+            center = _lcd_chamber_center(img, geom.mask)
+            if center is None:
+                cy_c, cx_c = geom.cy_px, geom.cx_px
+            else:
+                cy_c, cx_c = center
             H, W = img.shape
-            f = 0.78
-            y0 = max(0, int(geom.cy_px - geom.radius_px * f))
-            y1 = min(H, int(geom.cy_px + geom.radius_px * f))
-            x0 = max(0, int(geom.cx_px - geom.radius_px * f))
-            x1 = min(W, int(geom.cx_px + geom.radius_px * f))
+            ps = series.metadata.pixel_spacing_mm  # (row, col)
+            half_px_y = max(1, int(round(spec.lcd_insert_half_width_mm / ps[0])))
+            half_px_x = max(1, int(round(spec.lcd_insert_half_width_mm / ps[1])))
+            y0 = max(0, int(cy_c) - half_px_y)
+            y1 = min(H, int(cy_c) + half_px_y)
+            x0 = max(0, int(cx_c) - half_px_x)
+            x1 = min(W, int(cx_c) + half_px_x)
             crop = img[y0:y1, x0:x1]
 
             # A tighter contrast window makes the low-contrast spokes more visible.

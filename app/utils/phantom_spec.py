@@ -80,6 +80,10 @@ class PhantomSpec:
     lcd_threshold_3t: int                  # total spokes required at ≥ 3 T (T1 & T2 the same)
     lcd_threshold_lowfield_t1: int         # total spokes required at < 3 T for an ACR-T1 scan
     lcd_threshold_lowfield_t2: int         # total spokes required at < 3 T for an ACR-T2 scan
+    # Half-width of the LCD spoke pattern in physical mm. The disk-spoke
+    # insert is the same physical size in the Large and Medium phantoms, so
+    # the on-screen crop is anchored to mm rather than to phantom radius.
+    lcd_insert_half_width_mm: float
 
 
 LARGE = PhantomSpec(
@@ -127,6 +131,9 @@ LARGE = PhantomSpec(
     lcd_threshold_3t=37,            # ≥ 37 total spokes at 3 T (T1 & T2 the same)
     lcd_threshold_lowfield_t1=30,   # ≥ 30 total spokes at 1.5 T for ACR-T1
     lcd_threshold_lowfield_t2=25,   # ≥ 25 total spokes at 1.5 T for ACR-T2
+    # The spoke pattern fits within roughly a 60 mm diameter; 35 mm half-width
+    # gives the spokes plus a little surrounding context for orientation.
+    lcd_insert_half_width_mm=55.0,
 )
 
 
@@ -175,6 +182,8 @@ MEDIUM = PhantomSpec(
     lcd_threshold_3t=37,            # ≥ 37 total spokes at 3 T (T1 & T2 the same)
     lcd_threshold_lowfield_t1=30,   # ≥ 30 total spokes at 1.5 T for ACR-T1
     lcd_threshold_lowfield_t2=25,   # ≥ 25 total spokes at 1.5 T for ACR-T2
+    # The LCD insert is the same physical size as in the Large phantom.
+    lcd_insert_half_width_mm=55.0,
 )
 
 
