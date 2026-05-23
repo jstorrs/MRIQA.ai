@@ -668,49 +668,57 @@ def _detect_sequence_type(tr_ms: float, te_ms: float) -> str:
 def _render_analysis_inputs(series, *, key_prefix: str, show_sequence: bool = True):
     """Render the phantom + field-strength (+ sequence, axial only) inputs at
     the top of an Analysis tab and apply them to `series` in place. Defaults
-    are seeded from the loaded series — phantom from the segmented left-right
-    width (robust to A-P bubbles; also valid on a sagittal scout where the
-    axial circumference runs L-R), field strength from the DICOM tag snapped
-    to 1.5 / 3.0 T, and the sequence type from TR / TE. User overrides stick
-    until a different series is loaded.
+    are detected per-series — phantom from the segmented left-right width
+    (robust to A-P bubbles; also valid on a sagittal scout where the axial
+    circumference runs L-R), field strength from the DICOM tag snapped to
+    1.5 / 3.0 T, sequence from TR / TE.
 
-    `key_prefix` keeps Streamlit widget keys unique when the same controls
-    appear on more than one tab body within a single run.
+    The widget keys are suffixed with the loaded series UID so picking a
+    different series re-mounts the dropdowns with fresh detected defaults
+    via `index=`. User overrides within the same series persist because the
+    key stays stable across reruns of that series. This avoids the Streamlit
+    quirk where pre-render assignment to `st.session_state[widget_key]` is
+    not honored once the widget has already been instantiated under that key
+    in a prior run.
+
+    `key_prefix` keeps the keys unique when the same controls render on more
+    than one tab body within a single run.
     """
     series_uid = st.session_state.get("loaded_series_uid") or str(id(series))
-    seed_key = f"{key_prefix}_seeded_for"
+    series_tag = "".join(c if c.isalnum() else "_" for c in str(series_uid))[-32:]
 
-    # Re-seed the dropdowns whenever a new series is loaded so the auto-detected
-    # values appear as the pre-selected entries. Subsequent reruns within the
-    # same series leave the user's override alone.
-    if st.session_state.get(seed_key) != series_uid:
-        idx0 = series.acr_slice_map.get(1, 0)
-        spec_auto, _ = detect_phantom_spec(
-            series.pixel_array[idx0], series.metadata.pixel_spacing_mm,
-        )
-        st.session_state[f"{key_prefix}_phantom"] = spec_auto.short_name
-        b0 = series.metadata.field_strength_t
-        st.session_state[f"{key_prefix}_field"] = "3.0 T" if b0 >= 2.0 else "1.5 T"
-        st.session_state[f"{key_prefix}_sequence"] = _detect_sequence_type(
-            series.metadata.repetition_time_ms, series.metadata.echo_time_ms,
-        )
-        st.session_state[seed_key] = series_uid
+    idx0 = series.acr_slice_map.get(1, 0)
+    spec_auto, _ = detect_phantom_spec(
+        series.pixel_array[idx0], series.metadata.pixel_spacing_mm,
+    )
+    detected_phantom = spec_auto.short_name
+    b0 = series.metadata.field_strength_t
+    detected_field = "3.0 T" if b0 >= 2.0 else "1.5 T"
+    detected_sequence = _detect_sequence_type(
+        series.metadata.repetition_time_ms, series.metadata.echo_time_ms,
+    )
+
+    phantom_options = [opt[0] for opt in _PHANTOM_OPTIONS]
+    field_options = ["1.5 T", "3.0 T"]
+    sequence_options = ["T1", "T2"]
 
     cols = st.columns(3 if show_sequence else 2)
     with cols[0]:
         choice = st.selectbox(
             "ACR phantom model",
-            options=[opt[0] for opt in _PHANTOM_OPTIONS],
+            options=phantom_options,
             format_func=lambda k: dict(_PHANTOM_OPTIONS)[k],
-            key=f"{key_prefix}_phantom",
+            index=phantom_options.index(detected_phantom),
+            key=f"{key_prefix}_phantom_{series_tag}",
             help="Pre-selected from the phantom's segmented left-right width. "
                  "Large = 190 mm Ø / 148 mm S-I; Medium = 165 mm Ø / 134 mm S-I.",
         )
     with cols[1]:
         fld = st.selectbox(
             "Scanner field strength",
-            ["1.5 T", "3.0 T"],
-            key=f"{key_prefix}_field",
+            options=field_options,
+            index=field_options.index(detected_field),
+            key=f"{key_prefix}_field_{series_tag}",
             help="Pre-selected from the DICOM MagneticFieldStrength tag "
                  "(snapped to the nearest of 1.5 / 3.0 T).",
         )
@@ -718,8 +726,9 @@ def _render_analysis_inputs(series, *, key_prefix: str, show_sequence: bool = Tr
         with cols[2]:
             seq = st.selectbox(
                 "Axial sequence",
-                ["T1", "T2"],
-                key=f"{key_prefix}_sequence",
+                options=sequence_options,
+                index=sequence_options.index(detected_sequence),
+                key=f"{key_prefix}_sequence_{series_tag}",
                 help="Pre-selected from TR / TE (T2 when TE ≥ 40 ms). At 1.5 T "
                      "the ACR LCD threshold is sequence-dependent: 30 spokes "
                      "for T1, 25 for T2.",
