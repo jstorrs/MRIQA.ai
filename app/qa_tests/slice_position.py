@@ -118,9 +118,10 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
     try:
         ps = series.metadata.pixel_spacing_mm
         for acr_slice in (1, 11):
-            if acr_slice not in series.acr_slice_map:
+            slice_img = series.try_slice(acr_slice)
+            if slice_img is None:
                 continue
-            img = series.slice(acr_slice).astype(np.float32)
+            img = slice_img.astype(np.float32)
             try:
                 r = _measure_one(img, ps[0])
             except Exception as exc:

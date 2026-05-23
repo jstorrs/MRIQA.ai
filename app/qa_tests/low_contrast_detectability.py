@@ -74,14 +74,10 @@ def run(
     )
     try:
         for acr in lcd_slices:
-            if acr in series.acr_slice_map:
-                idx = series.acr_slice_map[acr]
-            elif acr in spec.slice_role_indices and spec.slice_role_indices[acr] < series.pixel_array.shape[0]:
-                idx = spec.slice_role_indices[acr]
-                series.acr_slice_map[acr] = idx
-            else:
+            slice_img = series.try_slice(acr, spec_fallback=True)
+            if slice_img is None:
                 continue
-            img = series.pixel_array[idx].astype(np.float32)
+            img = slice_img.astype(np.float32)
             geom = localize_phantom(img)
             # Zoom onto the central low-contrast disk pattern. The spoke
             # insert is the same physical size in the Large and Medium

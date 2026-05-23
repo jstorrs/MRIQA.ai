@@ -71,6 +71,23 @@ class DicomSeries:
             raise KeyError(f"No physical slice mapped to ACR slice {acr_role}")
         return self.pixel_array[self.acr_slice_map[acr_role]]
 
+    def try_slice(
+        self, acr_role: int, *, spec_fallback: bool = False,
+    ) -> np.ndarray | None:
+        """Return the 2D pixel array for ``acr_role``, or ``None`` if not
+        available. With ``spec_fallback=True``, fall back to the spec's
+        default role→index mapping (and cache the result in
+        ``acr_slice_map``) when the role is missing from the live map.
+        """
+        if acr_role in self.acr_slice_map:
+            return self.pixel_array[self.acr_slice_map[acr_role]]
+        if spec_fallback:
+            idx = self.spec.slice_role_indices.get(acr_role)
+            if idx is not None and idx < self.pixel_array.shape[0]:
+                self.acr_slice_map[acr_role] = idx
+                return self.pixel_array[idx]
+        return None
+
 
 def _read_one(source) -> FileDataset | None:
     """Read a single DICOM from path, Path, bytes, or file-like."""
