@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import pydicom
 import streamlit as st
+from streamlit.components.v1 import html as _components_html
 
 # ---- make the `app/` package importable --------------------------------- #
 _THIS = Path(__file__).resolve()
@@ -107,34 +108,6 @@ def _normalize_img(img: np.ndarray, wl: float | None = None, ww: float | None = 
         lo, hi = wl - ww / 2, wl + ww / 2
         out = np.clip((img - lo) / (hi - lo + 1e-6), 0, 1)
     return (out * 255).astype(np.uint8)
-
-
-def _expand_uploads(uploaded_files) -> list:
-    sources = []
-    for uf in uploaded_files:
-        name = uf.name.lower()
-        data = uf.read()
-        if name.endswith(".zip"):
-            try:
-                z = zipfile.ZipFile(io.BytesIO(data))
-                for info in z.infolist():
-                    if info.is_dir():
-                        continue
-                    nlow = info.filename.lower()
-                    if "__macosx" in nlow or nlow.endswith(".ds_store"):
-                        continue
-                    sources.append(z.read(info))
-            except zipfile.BadZipFile:
-                st.error(f"Could not read zip: {uf.name}")
-        else:
-            sources.append(data)
-    return sources
-
-
-def _uploads_signature(uploaded_files) -> str:
-    """Stable key for an upload set — used to cache series catalogs across reruns."""
-    return ";".join(f"{uf.name}:{getattr(uf, 'size', len(uf.getvalue()))}"
-                    for uf in uploaded_files)
 
 
 def _catalog_uploads(uploaded_files) -> list[dict]:
@@ -265,6 +238,32 @@ def _snapshot_run(series: DicomSeries, results: dict[str, TestResult]) -> dict:
     }
 
 
+def _switch_tab(label: str) -> None:
+    """Programmatically activate the st.tabs tab whose label starts with
+    `label`. Streamlit has no API for this, so we inject a tiny script that
+    walks the parent document for buttons carrying the ARIA `role="tab"`
+    contract used by st.tabs and clicks the first match. Fragile against
+    Streamlit DOM changes but the ARIA role is the stable target."""
+    _components_html(
+        f"""
+        <script>
+        (function() {{
+          const click = () => {{
+            const doc = window.parent.document;
+            const buttons = doc.querySelectorAll('button[role="tab"]');
+            for (const b of buttons) {{
+              const text = (b.innerText || b.textContent || '').trim();
+              if (text.startsWith({label!r})) {{ b.click(); return; }}
+            }}
+          }};
+          setTimeout(click, 50);
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Page setup                                                                  #
 # --------------------------------------------------------------------------- #
@@ -316,8 +315,42 @@ st.caption(
 _PHANTOM_OPTIONS = [(s.short_name, s.name) for s in PHANTOMS.values()]
 
 
+# --------------------------------------------------------------------------- #
+# Session state init                                                          #
+# --------------------------------------------------------------------------- #
+
+if "series" not in st.session_state:
+    st.session_state.series = None
+if "results" not in st.session_state:
+    st.session_state.results = {}
+if "history" not in st.session_state:
+    st.session_state.history = []           # list[snapshot]
+if "validation_log" not in st.session_state:
+    st.session_state.validation_log = []    # list[dict]
+if "series_warnings" not in st.session_state:
+    st.session_state.series_warnings = []   # non-fatal warnings from validate_series
+if "series_catalog" not in st.session_state:
+    # Accumulated series across all upload batches in this session. Each entry
+    # is the dict returned by _catalog_uploads — {uid, description, number,
+    # modality, n_files, sources}. Selected by `selected_series_uid`.
+    st.session_state.series_catalog = []
+if "uploader_nonce" not in st.session_state:
+    # Bumping the nonce re-mounts the file_uploader widget as a fresh, empty
+    # drop zone — that's how we hide the persistent "1 file uploaded" list.
+    st.session_state.uploader_nonce = 0
+
+
+def _show_load_error(exc: Exception):
+    if isinstance(exc, DicomLoadError):
+        st.sidebar.error(str(exc))
+        if exc.tip:
+            st.sidebar.info(f"**Tip:** {exc.tip}")
+    else:
+        st.sidebar.error(f"Failed to load DICOMs: {exc}")
+
+
 with st.sidebar:
-    st.header("Upload phantom DICOMs")
+    st.header("Phantom DICOMs")
     st.markdown(
         "**Only upload ACR phantom scans.** Do not upload patient images. "
         "Free-tier deployments process files in memory; nothing is stored "
@@ -335,14 +368,67 @@ with st.sidebar:
     )
     st.divider()
 
-    uploaded = st.file_uploader(
-        "Drop a .zip of the series, or select .dcm files",
+    new_uploads = st.file_uploader(
+        "Add DICOMs (drop files or a .zip)",
         type=None,
         accept_multiple_files=True,
-        help="Accepts a folder zip or individual .dcm files. The series picker "
-             "shows everything found in the upload — pick the axial protocol "
-             "for the full QA or the sagittal scout for the S-I length check.",
+        key=f"uploader_{st.session_state.uploader_nonce}",
+        help="Drop .dcm files, a folder zip, or any mix. Each batch is scanned "
+             "and added to the series list below.",
     )
+
+    if new_uploads:
+        try:
+            new_entries = _catalog_uploads(new_uploads)
+        except Exception as exc:  # pragma: no cover - defensive
+            _show_load_error(exc)
+            new_entries = []
+        existing_uids = {e["uid"] for e in st.session_state.series_catalog}
+        added = [e for e in new_entries if e["uid"] not in existing_uids]
+        if added:
+            st.session_state.series_catalog = st.session_state.series_catalog + added
+        elif new_entries:
+            st.sidebar.info(
+                f"All {len(new_entries)} series in that batch are already in the list."
+            )
+        elif not new_entries:
+            _show_load_error(DicomLoadError(
+                "No DICOM files found in the upload.",
+                tip="The uploader accepts .dcm files or zips containing them.",
+            ))
+        # Bump the nonce so the widget remounts as an empty drop zone on rerun.
+        st.session_state.uploader_nonce += 1
+        st.rerun()
+
+    catalog = st.session_state.series_catalog
+    if catalog:
+        uid_options = [e["uid"] for e in catalog]
+        labels = {e["uid"]: _series_label(e) for e in catalog}
+        # Default the picker to the previously-selected UID (if still present),
+        # otherwise to the first entry in the list.
+        if st.session_state.get("selected_series_uid") not in uid_options:
+            st.session_state.selected_series_uid = uid_options[0]
+        def _on_series_pick():
+            # Set a one-shot flag the main page consumes to switch the active
+            # tab to Analysis after the user picks a different series.
+            st.session_state.pending_tab_switch = "Analysis"
+
+        st.selectbox(
+            f"Series ({len(catalog)} loaded)",
+            options=uid_options,
+            format_func=lambda u: labels[u],
+            key="selected_series_uid",
+            on_change=_on_series_pick,
+            help="Pick which series to analyze. Add more files above to extend "
+                 "this list.",
+        )
+
+        if st.button("Clear all series", use_container_width=True):
+            for k in ("series", "results", "series_warnings",
+                      "view_wl", "view_ww",
+                      "series_catalog", "selected_series_uid", "loaded_series_uid"):
+                st.session_state.pop(k, None)
+            st.rerun()
 
     with st.expander("Advanced — load from a local folder"):
         local_folder = st.text_input(
@@ -351,43 +437,14 @@ with st.sidebar:
             help="Only works when running the app locally, not on Streamlit Cloud.",
         )
 
-    if st.session_state.get("series") is not None:
-        st.divider()
-        if st.button("Reset / load a new series", use_container_width=True):
-            for k in ("series", "results", "series_warnings",
-                      "view_wl", "view_ww",
-                      "upload_catalog", "selected_series_uid", "loaded_series_uid"):
-                st.session_state.pop(k, None)
-            st.rerun()
-
     st.divider()
     st.caption(f"App version {APP_VERSION}")
 
 # --------------------------------------------------------------------------- #
-# Load series                                                                 #
+# Load series from the catalog selection                                      #
 # --------------------------------------------------------------------------- #
 
-if "series" not in st.session_state:
-    st.session_state.series = None
-if "results" not in st.session_state:
-    st.session_state.results = {}
-if "history" not in st.session_state:
-    st.session_state.history = []           # list[snapshot]
-if "validation_log" not in st.session_state:
-    st.session_state.validation_log = []    # list[dict]
-if "series_warnings" not in st.session_state:
-    st.session_state.series_warnings = []   # non-fatal warnings from validate_series
-
 series: DicomSeries | None = st.session_state.series
-
-def _show_load_error(exc: Exception):
-    if isinstance(exc, DicomLoadError):
-        st.sidebar.error(str(exc))
-        if exc.tip:
-            st.sidebar.info(f"**Tip:** {exc.tip}")
-    else:
-        st.sidebar.error(f"Failed to load DICOMs: {exc}")
-
 
 if local_folder.strip():
     try:
@@ -398,56 +455,21 @@ if local_folder.strip():
         st.session_state.series_warnings = validate_series(series)
     except Exception as exc:
         _show_load_error(exc)
-elif uploaded:
-    try:
-        sig = _uploads_signature(uploaded)
-        cache = st.session_state.get("upload_catalog")
-        if not cache or cache.get("sig") != sig:
-            catalog = _catalog_uploads(uploaded)
-            st.session_state.upload_catalog = {"sig": sig, "entries": catalog}
-            # New upload set -> drop any previous selection so the user's
-            # first-in-list choice picks up.
-            st.session_state.pop("selected_series_uid", None)
-        else:
-            catalog = cache["entries"]
-
-        if not catalog:
-            _show_load_error(DicomLoadError(
-                "No DICOM files found in the upload.",
-                tip="The uploader accepts .dcm files or zips containing them.",
-            ))
-        else:
-            if len(catalog) > 1:
-                uid_options = [e["uid"] for e in catalog]
-                labels = {e["uid"]: _series_label(e) for e in catalog}
-                default_idx = 0
-                if st.session_state.get("selected_series_uid") in uid_options:
-                    default_idx = uid_options.index(
-                        st.session_state["selected_series_uid"])
-                chosen_uid = st.sidebar.selectbox(
-                    f"Series ({len(catalog)} found in upload)",
-                    options=uid_options,
-                    format_func=lambda u: labels[u],
-                    index=default_idx,
-                    key="selected_series_uid",
-                    help="Pick which series in the uploaded zip to analyze.",
-                )
-            else:
-                chosen_uid = catalog[0]["uid"]
-                st.session_state["selected_series_uid"] = chosen_uid
-
-            chosen = next(e for e in catalog if e["uid"] == chosen_uid)
-            # Only reload if the selection changed since the last successful load
-            if st.session_state.get("loaded_series_uid") != chosen_uid:
-                series = load_series(chosen["sources"])
-                st.session_state.series = series
-                st.session_state.results = {}
-                st.session_state.series_warnings = validate_series(series)
-                st.session_state.loaded_series_uid = chosen_uid
-            else:
-                series = st.session_state.series
-    except Exception as exc:
-        _show_load_error(exc)
+elif st.session_state.series_catalog and st.session_state.get("selected_series_uid"):
+    chosen_uid = st.session_state["selected_series_uid"]
+    chosen = next((e for e in st.session_state.series_catalog
+                   if e["uid"] == chosen_uid), None)
+    if chosen and st.session_state.get("loaded_series_uid") != chosen_uid:
+        try:
+            series = load_series(chosen["sources"])
+            st.session_state.series = series
+            st.session_state.results = {}
+            st.session_state.series_warnings = validate_series(series)
+            st.session_state.loaded_series_uid = chosen_uid
+        except Exception as exc:
+            _show_load_error(exc)
+    else:
+        series = st.session_state.series
 
 # Phantom-spec and field-strength selection happen on the Analysis tab so the
 # inputs to the automated algorithms sit together. See `_render_analysis_inputs`.
@@ -573,16 +595,21 @@ if st.session_state.series_warnings and analysis_mode == "axial":
 # --------------------------------------------------------------------------- #
 
 if analysis_mode == "axial":
-    tab_viewer, tab_slices, tab_results, tab_manual, tab_history, tab_validation, tab_export = st.tabs(
-        ["Viewer", "Analysis", "Results", "Manual scoring",
+    tab_slices, tab_results, tab_manual, tab_viewer, tab_history, tab_validation, tab_export = st.tabs(
+        ["Analysis", "Results", "Manual scoring", "Viewer",
          "History", "Validation", "Export"]
     )
 else:
-    tab_viewer, tab_results, tab_history, tab_validation, tab_export = st.tabs(
-        ["Viewer", "Analysis", "History", "Validation", "Export"]
+    tab_results, tab_viewer, tab_history, tab_validation, tab_export = st.tabs(
+        ["Analysis", "Viewer", "History", "Validation", "Export"]
     )
     tab_slices = None
     tab_manual = None
+
+# Honor a queued tab-switch request (set by the series-picker on_change).
+_pending = st.session_state.pop("pending_tab_switch", None)
+if _pending:
+    _switch_tab(_pending)
 
 # ----- Viewer ----------------------------------------------------------- #
 with tab_viewer:
