@@ -917,6 +917,23 @@ with tab_results:
                                 show_sequence=False)
 
         st.divider()
+        st.subheader("Sagittal image")
+        st.caption(
+            "The S-I length is measured on a single sagittal scout. The "
+            "selector mirrors the axial slice-mapping picker for consistency; "
+            "with a 1-image upload it is trivially 1 of 1."
+        )
+        _sag_cols = st.columns(4)
+        with _sag_cols[0]:
+            sag_idx = st.number_input(
+                "Sagittal image → physical index",
+                min_value=1, max_value=max(1, md.n_slices),
+                value=1, step=1, key="sagittal_image_index",
+            )
+            _sag_preview = _normalize_img(series.pixel_array[int(sag_idx) - 1])
+            st.image(_sag_preview, caption=f"Physical slice {int(sag_idx)}", width=180)
+
+        st.divider()
         st.subheader("Run")
         st.caption(
             f"Measures the phantom's superior-inferior length on the sagittal "
