@@ -1,6 +1,6 @@
 # MRIQA.ai — ACR Large Phantom QA (MVP)
 
-A pilot-ready Streamlit web app that ingests an MRI DICOM series of the **ACR Large MRI Phantom** and runs the seven QA tests defined in the ACR MRI Quality Control Manual (2015). Five tests are fully automated; two visual scoring tests open inside the app with zoomed views.
+A pilot-ready Streamlit web app that ingests an MRI DICOM series of the **ACR Large or Medium MRI Phantom** and runs the seven QA tests defined in the ACR MRI Quality Control Manual and the *ACR Large and Medium Phantom Test Guidance (Oct 2022)*. Five tests are fully automated; two visual scoring tests open inside the app with zoomed views.
 
 **Status:** MVP. **Audience:** medical physicists, QA technologists, imaging-center pilots.
 **Not a medical device. Not for diagnostic use.**
@@ -17,7 +17,7 @@ A pilot-ready Streamlit web app that ingests an MRI DICOM series of the **ACR La
 - In-browser-session history of completed runs
 - Professional PDF report with cover page, verdict block, per-test pages, footer with tamper-evident signature
 - CSV export of every measurement
-- ACR thresholds taken from the 2015 QC Manual; auto-adjusted for field strength
+- ACR thresholds taken from the 2022 *Large and Medium Phantom Test Guidance*; auto-adjusted for field strength and phantom model
 
 ---
 
@@ -94,17 +94,19 @@ The analysis code in `app/` has zero dependency on Streamlit. When the project e
 
 ## What ACR tests are automated, and at what thresholds
 
-All thresholds come from the **ACR MRI Quality Control Manual, 2015 edition**, and the **ACR Large Phantom Test Guidance**. They live as module-level constants near the top of each test file so they're easy to audit and adjust.
+All thresholds come from the **ACR Large and Medium Phantom Test Guidance (Oct 2022)** — committed at the repo root as `MR ACR Large Med Phantom Guidance 102022.pdf` and a text companion. They live in a single `PhantomSpec` dataclass per phantom in `app/utils/phantom_spec.py`, so they're easy to audit, override, and add new phantoms to.
 
-| # | Test                              | Automation        | Slice    | Default threshold                                             |
+Defaults below are for the **Large** phantom; **Medium** thresholds are tighter where the doc specifies (e.g. ±2 mm geometric tolerance, PIU ≥ 85 % at 3 T).
+
+| # | Test                              | Automation        | Slice    | Large-phantom threshold                                       |
 |---|-----------------------------------|-------------------|----------|---------------------------------------------------------------|
-| 1 | Geometric Accuracy                | Automated         | 1, 5     | 190 mm ± 2 mm (slice 5); 148 mm ± 2 mm (slice 1)              |
+| 1 | Geometric Accuracy                | Automated         | 1, 5     | 190 mm ± 3 mm (axial); 148 mm ± 3 mm (S-I on localizer)       |
 | 2 | High-Contrast Spatial Resolution  | User confirmation | 1        | 1.0 mm row resolvable in UL and LR (configurable)             |
 | 3 | Slice Thickness Accuracy          | Automated         | 1        | 5.0 mm ± 0.7 mm                                               |
 | 4 | Slice Position Accuracy           | Automated         | 1, 11    | \|bar offset\| ≤ 5 mm                                         |
-| 5 | Image Intensity Uniformity (PIU)  | Automated         | 7        | ≥ 87.5 % at 3 T; ≥ 82 % at < 3 T                              |
+| 5 | Image Intensity Uniformity (PIU)  | Automated         | 7        | ≥ 87.5 % at < 3 T; ≥ 82 % at 3 T                              |
 | 6 | Percent Signal Ghosting (PSG)     | Automated         | 7        | ≤ 3.0 %                                                       |
-| 7 | Low-Contrast Object Detectability | User confirmation | 8–11     | ≥ 9 spokes at 3 T; ≥ 7 at < 3 T                               |
+| 7 | Low-Contrast Object Detectability | User confirmation | 8–11     | ≥ 37 total spokes at 3 T; ≥ 30 at 1.5 T (ACR-T1)              |
 
 ---
 

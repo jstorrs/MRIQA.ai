@@ -1,17 +1,23 @@
-"""Test 7 — Low-Contrast Object Detectability / LCD (ACR MR QC Manual 2015 §3.7)
+"""Test 7 — Low-Contrast Object Detectability / LCD
+(ACR Large and Medium Phantom Test Guidance, Oct 2022, § 7)
 
 User-confirmation test.
 
 Procedure
 ---------
 Slices 8, 9, 10, 11 each contain a low-contrast disk pattern (10 spokes,
-each spoke a series of disks of decreasing contrast). The technologist
-counts the number of *complete* spokes visible on each slice; the test
-result is the sum across all four slices.
+each spoke three disks of decreasing contrast). Per slice the disk
+contrasts are 1.4 %, 2.5 %, 3.6 %, 5.1 % respectively, so slice 11
+saturates first. The technologist counts the number of *complete*
+spokes visible on each slice; the test result is the **sum** across all
+four slices.
 
-Action limits at 3 T: ≥ 9 spokes.
-At < 3 T: ≥ 7 spokes (manual cites 9 if extremity coil, 7 for body).
-This MVP defaults to 9 at 3 T and 7 otherwise.
+Action limits (per § Table 5), applied to the total spoke count:
+    - 3 T:        ≥ 37 (both ACR-T1 and ACR-T2)
+    - 1.5–<3 T:  ACR-T1 ≥ 30, ACR-T2 ≥ 25 (this engine uses the T1 value)
+    - < 1.5 T:    ≥ 7
+
+The limits are identical for Large and Medium phantoms.
 """
 
 from __future__ import annotations

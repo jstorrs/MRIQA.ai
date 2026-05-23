@@ -238,7 +238,7 @@ if not check_password():
 st.caption(
     "Decision-support tool for medical physicists. "
     "**Not a medical device. Not for diagnostic use.** "
-    "Implements the ACR MRI Quality Control Manual (2015) procedures."
+    "Thresholds from the ACR Large and Medium Phantom Test Guidance (Oct 2022)."
 )
 
 # --------------------------------------------------------------------------- #

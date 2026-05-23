@@ -1,17 +1,19 @@
-"""Test 5 — Image Intensity Uniformity / PIU (ACR MR QC Manual 2015 §3.5)
+"""Test 5 — Image Intensity Uniformity / PIU
+(ACR Large and Medium Phantom Test Guidance, Oct 2022, § 5)
 
 Procedure
 ---------
 * Use slice 7 of the ACR axial series.
-* Define a large ROI of ~200 cm² (~80% of the phantom area) centered in
-  the phantom.
+* Define a large ROI centered in the phantom (200 cm² for Large,
+  160 cm² for Medium — see ``spec.piu_large_roi_area_cm2``).
 * Slide a small ROI (~1 cm²) inside the large ROI. Find the small ROI
   with the highest mean signal and the small ROI with the lowest mean
   signal.
 * PIU = 100 × (1 − (high − low) / (high + low)).
-* Action limits:
-    - ≥ 87.5 % when field strength ≥ 3 T
-    - ≥ 82.0 % otherwise (1.5 T)
+* Action limits (Large phantom, per § 5.4 / Table 4):
+    - ≥ 87.5 % at < 3 T
+    - ≥ 82.0 % at 3 T   (lower because of dielectric/conductivity effects)
+  Medium phantom is tighter (≥ 90 % at < 3 T, ≥ 85 % at 3 T).
 
 Implementation
 --------------
