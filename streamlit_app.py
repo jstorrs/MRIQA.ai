@@ -586,11 +586,17 @@ with tab_run:
 
     st.markdown("### Visual scoring — high-contrast resolution")
     st.caption("On slice 1, look at the UL and LR hole arrays in the zoomed crops below.")
+    _series_key = id(series)
     _hcr_existing = st.session_state.results.get("high_contrast_resolution")
     if _hcr_existing is not None and _hcr_existing.annotated_images:
         _hcr_images = _hcr_existing.annotated_images
     else:
-        _hcr_images = high_contrast_resolution.run(series, spec=series.spec).annotated_images
+        _hcr_cache = st.session_state.get("_visual_hcr_cache")
+        if _hcr_cache is None or _hcr_cache[0] != _series_key:
+            _hcr_images = high_contrast_resolution.run(series, spec=series.spec).annotated_images
+            st.session_state["_visual_hcr_cache"] = (_series_key, _hcr_images)
+        else:
+            _hcr_images = _hcr_cache[1]
     for _cap, _im in _hcr_images:
         st.image(_im, caption=_cap, width="stretch")
     res_sizes = list(series.spec.resolution_array_sizes_mm)
@@ -623,20 +629,28 @@ with tab_run:
     if _lcd_existing is not None and _lcd_existing.annotated_images:
         _lcd_images = _lcd_existing.annotated_images
     else:
-        _lcd_images = low_contrast_detectability.run(series, spec=series.spec).annotated_images
+        _lcd_cache = st.session_state.get("_visual_lcd_cache")
+        if _lcd_cache is None or _lcd_cache[0] != _series_key:
+            _lcd_images = low_contrast_detectability.run(series, spec=series.spec).annotated_images
+            st.session_state["_visual_lcd_cache"] = (_series_key, _lcd_images)
+        else:
+            _lcd_images = _lcd_cache[1]
     if _lcd_images:
         _img_cols = st.columns(min(len(_lcd_images), 4))
         for i, (_cap, _im) in enumerate(_lcd_images):
             with _img_cols[i % len(_img_cols)]:
                 st.image(_im, caption=_cap, width="stretch")
-    cs = st.columns(len(lcd_slices))
-    spoke_counts: dict[int, int] = {}
-    for col, s in zip(cs, lcd_slices):
-        with col:
-            spoke_counts[s] = st.number_input(
-                f"Slice {s} spokes", min_value=0, max_value=10, value=0, step=1
-            )
-    if st.button("Save LCD scoring"):
+    with st.form("lcd_scoring_form", clear_on_submit=False):
+        cs = st.columns(len(lcd_slices))
+        spoke_counts: dict[int, int] = {}
+        for col, s in zip(cs, lcd_slices):
+            with col:
+                spoke_counts[s] = st.number_input(
+                    f"Slice {s} spokes", min_value=0, max_value=10, value=0, step=1,
+                    key=f"lcd_spokes_{s}",
+                )
+        _lcd_submitted = st.form_submit_button("Save LCD scoring")
+    if _lcd_submitted:
         res = low_contrast_detectability.run(
             series, spec=series.spec, user_input=spoke_counts,
         )
