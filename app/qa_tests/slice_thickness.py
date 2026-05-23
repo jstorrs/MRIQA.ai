@@ -193,7 +193,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
 
         res.annotated_images.append((
             f"Slice 1 — slice-thickness ramps (={thickness_mm:.2f} mm)",
-            render_annotated(img, "", _draw_zoom)))
+            render_annotated(img, "", _draw_zoom, figsize=(8.0, 3.0))))
 
         # --- 4. Detection-quality heuristics ---
         if thickness_mm < 1.0 or thickness_mm > 15.0:
