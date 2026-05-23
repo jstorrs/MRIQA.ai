@@ -165,6 +165,67 @@ def _detect_resolution_bbox(image, geom):
     return bbox
 
 
+def _grid_count_from_bbox(bbox, clusters) -> int | None:
+    """Decide how many resolution-array grids are present from the detected
+    bbox + cluster set.
+
+    Measures the aspect ratio of the **rendered crop** (bbox + padding
+    matching :func:`crop_resolution_insert` 'full' mode) rather than the raw
+    bbox. Two reasons: (1) the raw bbox height covers the dominant-signal
+    row only, which makes its aspect ratio uninformative; and (2) the
+    rendered crop is what the user can visually compare, so its aspect is
+    what they'd naturally trust. Empirically:
+        * 3-array rendered crop: aspect ≈ 2.7
+        * 4-array rendered crop: aspect ≈ 3.3
+    Threshold at 3.0.
+
+    The cluster count is used as a confirmation: when it lands at 3 or 4 we
+    trust it over the aspect ratio (clean detection); otherwise the ratio
+    wins.
+    """
+    if bbox is None:
+        return None
+    ay0, ay1, ax0, ax1 = bbox
+    bbox_w_px = max(1, ax1 - ax0)
+    bbox_h_px = max(1, ay1 - ay0)
+    # Match crop_resolution_insert's 'full' padding so the aspect we evaluate
+    # equals the aspect of the figure shown to the user.
+    crop_w_px = bbox_w_px + 9   # x: c0-4 to c1+5
+    crop_h_px = bbox_h_px + 11  # y: r0-5 to r1+6
+    aspect_n = 4 if crop_w_px / crop_h_px >= 3.0 else 3
+    cluster_n = len(clusters) if clusters else 0
+    if cluster_n in (3, 4):
+        return cluster_n
+    return aspect_n
+
+
+def detect_present_sizes(series: DicomSeries, spec: PhantomSpec | None = None) -> list[float]:
+    """Return the resolution-array sizes physically present on this phantom,
+    in the same left→right (largest→smallest) order as
+    ``spec.resolution_array_sizes_mm``.
+
+    Older Large phantoms have only the three 1.1 / 1.0 / 0.9 mm arrays;
+    current Large + every Medium phantom adds the fourth 0.8 mm array. We
+    classify via the bbox aspect ratio of the detected insert, with the
+    cluster count used as a confirmation when it lands at a plausible value
+    (see :func:`_grid_count_from_bbox`). Falls back to the full spec list on
+    detection failure.
+    """
+    if spec is None:
+        spec = series.spec
+    sizes = list(spec.resolution_array_sizes_mm)
+    try:
+        img = series.slice(1).astype(np.float32)
+        geom = localize_phantom(img)
+        bbox, clusters = _detect_resolution_grids(img, geom)
+    except Exception:
+        return sizes
+    n = _grid_count_from_bbox(bbox, clusters)
+    if n is not None and n < len(sizes):
+        return sizes[:n]
+    return sizes
+
+
 def run(
     series: DicomSeries,
     *,
@@ -178,8 +239,6 @@ def run(
     """
     if spec is None:
         spec = series.spec
-    sizes_label = " | ".join(f"{s:.1f}" for s in spec.resolution_array_sizes_mm)
-    sizes_csv = " / ".join(f"{s:.1f}" for s in spec.resolution_array_sizes_mm)
     res = TestResult(
         test_id="high_contrast_resolution",
         test_name="High-Contrast Spatial Resolution",
@@ -191,14 +250,31 @@ def run(
         geom = localize_phantom(img)
 
         full_crop, _ = crop_resolution_insert(img, geom, "full")
-        _, clusters = _detect_resolution_grids(img, geom)
-        detected_n = len(clusters) if clusters else None
-        spec_n = len(spec.resolution_array_sizes_mm)
+        bbox, clusters = _detect_resolution_grids(img, geom)
+        spec_sizes = list(spec.resolution_array_sizes_mm)
+        spec_n = len(spec_sizes)
+        detected_n = _grid_count_from_bbox(bbox, clusters)
+        # Build the label from the sizes physically present on this phantom.
+        # _grid_count_from_bbox primarily uses the bbox aspect ratio (which
+        # remains correct even when the cluster detector merges the grids
+        # into a single run).
+        if detected_n is not None and detected_n < spec_n:
+            present_sizes = spec_sizes[:detected_n]
+        else:
+            present_sizes = spec_sizes
+        sizes_label = " | ".join(f"{s:.1f}" for s in present_sizes)
+        sizes_csv = " / ".join(f"{s:.1f}" for s in present_sizes)
         count_note = ""
         if detected_n is not None:
-            count_note = f" Detector saw {detected_n} grid{'s' if detected_n != 1 else ''}"
-            if detected_n != spec_n:
-                count_note += f" (spec expects {spec_n})"
+            cluster_n = len(clusters) if clusters else 0
+            count_note = (
+                f" Detector inferred {detected_n} grid"
+                f"{'s' if detected_n != 1 else ''} from the insert aspect ratio"
+            )
+            if cluster_n and cluster_n != detected_n:
+                count_note += f" (cluster count was {cluster_n})"
+            if detected_n > spec_n:
+                count_note += f"; spec expects {spec_n}"
                 res.warnings.append(
                     f"Detected {detected_n} resolution grid(s) but the {spec.short_name} "
                     f"spec expects {spec_n}. Verify the crop and the selected phantom variant."

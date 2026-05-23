@@ -1072,7 +1072,14 @@ if tab_manual is not None:
                 _hcr_images = _hcr_cache[1]
         for _cap, _im in _hcr_images:
             st.image(_im, caption=_cap, width="stretch")
-        res_sizes = list(series.spec.resolution_array_sizes_mm)
+        # Drop sizes the detector didn't actually see (older Large phantoms
+        # have three grids; the spec also lists 0.8 mm for the four-grid
+        # variant, which would be a nonsense choice on a three-grid scan).
+        res_sizes = high_contrast_resolution.detect_present_sizes(
+            series, spec=series.spec,
+        )
+        if not res_sizes:
+            res_sizes = list(series.spec.resolution_array_sizes_mm)
         res_default_idx = (
             res_sizes.index(series.spec.resolution_pass_threshold_mm)
             if series.spec.resolution_pass_threshold_mm in res_sizes
