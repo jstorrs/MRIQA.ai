@@ -523,8 +523,9 @@ if series is None:
     with c3:
         st.markdown("### 3. Run + Report")
         st.markdown(
-            "Axial runs five automated tests plus two visual scoring tests; "
-            "sagittal runs one automated test. Export a PDF + CSV when done."
+            "Axial runs five automated tests (Slice mapping & Run) and, on a "
+            "separate **Manual scoring** tab, two visual tests. Sagittal runs "
+            "one automated test. Export a PDF + CSV when done."
         )
 
     st.divider()
@@ -620,14 +621,16 @@ if st.session_state.series_warnings and analysis_mode == "axial":
 # --------------------------------------------------------------------------- #
 
 if analysis_mode == "axial":
-    tab_viewer, tab_slices, tab_run, tab_results, tab_history, tab_validation, tab_export = st.tabs(
-        ["Viewer", "Slice mapping", "Run QA", "Results", "History", "Validation", "Export"]
+    tab_viewer, tab_slices, tab_results, tab_manual, tab_history, tab_validation, tab_export = st.tabs(
+        ["Viewer", "Slice mapping & Run", "Results", "Manual scoring",
+         "History", "Validation", "Export"]
     )
 else:
-    tab_viewer, tab_run, tab_results, tab_history, tab_validation, tab_export = st.tabs(
-        ["Viewer", "Run QA", "Results", "History", "Validation", "Export"]
+    tab_viewer, tab_results, tab_history, tab_validation, tab_export = st.tabs(
+        ["Viewer", "Results", "History", "Validation", "Export"]
     )
     tab_slices = None
+    tab_manual = None
 
 # ----- Viewer ----------------------------------------------------------- #
 with tab_viewer:
@@ -666,7 +669,145 @@ with tab_viewer:
     img = _normalize_img(vol[idx - 1], wl=st.session_state.view_wl, ww=st.session_state.view_ww)
     st.image(img, caption=f"Slice {idx} of {n}", width=560)
 
-# ----- Slice mapping (axial only) -------------------------------------- #
+_VISUAL_TEST_IDS = {"high_contrast_resolution", "low_contrast_detectability"}
+
+
+def _render_results_view(test_order, analysis_mode, series, *, key_prefix: str):
+    """Render the verdict banner + summary table + per-test details + a
+    save-to-history button. Shared between the Results tab and the inline
+    view on the Slice mapping & Run tab. `key_prefix` keeps Streamlit widget
+    keys unique when the same view is rendered in two places."""
+    # Axial: nudge the user toward manual scoring once automated results are
+    # in but the visual tests are still pending. If any automated test FAILED,
+    # the nudge becomes a warning instead — manual scoring is usually a waste
+    # of time on a series with a clear acquisition / calibration problem.
+    if analysis_mode == "axial":
+        visual_pending = [
+            tid for tid in _VISUAL_TEST_IDS
+            if tid not in st.session_state.results
+        ]
+        automated_failed = any(
+            r.status_text() == "FAIL"
+            for tid, r in st.session_state.results.items()
+            if tid not in _VISUAL_TEST_IDS
+        )
+        if visual_pending and not automated_failed:
+            st.info(
+                "Automated tests are in. Visual scoring (high-contrast "
+                "resolution + low-contrast detectability) is still pending — "
+                "open the **Manual scoring** tab to score them when ready."
+            )
+        elif visual_pending and automated_failed:
+            st.warning(
+                "One or more automated tests **failed**. Manual scoring is "
+                "usually not worth doing until the underlying acquisition / "
+                "calibration issue is resolved — but it's available on the "
+                "**Manual scoring** tab if you need a complete report."
+            )
+
+    verdict, counts = _overall_status(st.session_state.results)
+    verdict_cls = {
+        "PASS": "PASS", "FAIL": "FAIL", "REVIEW": "REVIEW",
+        "ERROR": "ERROR", "—": "dash",
+    }[verdict]
+    st.markdown(
+        f"""
+        <div class='mri-banner mri-banner-{verdict_cls}'>
+          <div style='font-size:1.05em; font-weight:600;'>
+            Overall verdict: {_status_badge(verdict)}
+          </div>
+          <div class='mri-small' style='margin-top:4px;'>
+            {counts['PASS']} pass · {counts['FAIL']} fail · {counts['REVIEW']} review · {counts['ERROR']} error
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    rows = []
+    for tid, _, _ in test_order:
+        r: TestResult | None = st.session_state.results.get(tid)
+        if r is None:
+            rows.append({"Test": tid, "Status": "—", "Confidence": "—", "Detail": ""})
+            continue
+        key = r.measurements[0] if r.measurements else None
+        rows.append({
+            "Test": r.test_name,
+            "Status": r.status_text(),
+            "Confidence": r.confidence_label(),
+            "Detail": (f"{key.label}: {key.value} {key.unit}" if key else "") + (
+                f" · spec {key.spec}" if key and key.spec else ""
+            ),
+            "Error": r.error or "",
+        })
+    st.dataframe(rows, hide_index=True, use_container_width=True)
+
+    st.markdown("### Per-test details")
+    for tid, label, _ in test_order:
+        r: TestResult | None = st.session_state.results.get(tid)
+        if r is None:
+            continue
+        title = f"{r.test_name} — {r.status_text()}"
+        with st.expander(title, expanded=(r.status_text() in ("FAIL", "ERROR") or r.confidence != "high")):
+            st.markdown(
+                f"{_status_badge(r.status_text())} &nbsp; {_confidence_badge(r.confidence)}",
+                unsafe_allow_html=True,
+            )
+            if r.warnings:
+                for w in r.warnings:
+                    st.warning(w)
+            if r.error:
+                st.error(r.error)
+            if r.notes:
+                st.caption(r.notes)
+            if r.measurements:
+                st.dataframe(
+                    [{"Measurement": m.label, "Value": m.value, "Unit": m.unit,
+                      "Spec": m.spec,
+                      "Pass": "" if m.passed is None else ("✓" if m.passed else "✗")}
+                     for m in r.measurements],
+                    hide_index=True, use_container_width=True,
+                )
+            if r.annotated_images:
+                img_cols = st.columns(min(2, len(r.annotated_images)))
+                for i, (cap, im) in enumerate(r.annotated_images):
+                    with img_cols[i % len(img_cols)]:
+                        st.image(im, caption=cap, use_container_width=True)
+
+    st.divider()
+    if st.button("Save this run to History", key=f"{key_prefix}_save_history"):
+        snap = _snapshot_run(series, dict(st.session_state.results))
+        st.session_state.history.append(snap)
+        st.success(f"Snapshot saved — {len(st.session_state.history)} run(s) in this session.")
+
+
+def _run_automated_tests(series, test_order):
+    """Run every test in test_order that is not a manual/visual scoring test.
+
+    Manual tests (HCR, LCD) live on the Manual scoring tab and are not
+    touched here. Returns a dict ready to merge into st.session_state.results.
+    """
+    out: dict[str, TestResult] = {}
+    automated = [
+        (tid, label, mod) for (tid, label, mod) in test_order
+        if tid not in _VISUAL_TEST_IDS
+    ]
+    prog = st.progress(0, text="Running automated tests...")
+    for i, (tid, label, mod) in enumerate(automated):
+        prog.progress((i + 1) / max(1, len(automated)),
+                      text=f"Running {label}...")
+        try:
+            out[tid] = mod.run(series, spec=series.spec)
+        except Exception as e:
+            out[tid] = TestResult(
+                test_id=tid, test_name=label, automated=True,
+                passed=None, error=str(e),
+            )
+    prog.empty()
+    return out
+
+
+# ----- Slice mapping & Run (axial only) -------------------------------- #
 if tab_slices is not None:
     with tab_slices:
         st.subheader("ACR slice role mapping")
@@ -697,11 +838,35 @@ if tab_slices is not None:
         series.acr_slice_map = {**series.acr_slice_map, **new_map}
         st.session_state.series = series
 
-# ----- Run QA ----------------------------------------------------------- #
-with tab_run:
+        st.divider()
+        st.markdown("### Run automated tests")
+        st.caption(
+            "Runs the five automated ACR tests against the slice mapping above. "
+            "The two visual tests (HCR, LCD) are scored separately on the "
+            "**Manual scoring** tab — typically only worth doing once the "
+            "automated tests pass."
+        )
+        if st.button("Run all automated tests", type="primary"):
+            results: dict[str, TestResult] = dict(st.session_state.results)
+            results.update(_run_automated_tests(series, test_order))
+            st.session_state.results = results
+            st.rerun()
+
+        # Show the results inline after a run, mirroring how the sagittal mode
+        # surfaces them on the same tab that hosts the Run button.
+        if st.session_state.results:
+            st.divider()
+            _render_results_view(test_order, analysis_mode, series,
+                                 key_prefix="slice_run_tab")
+
+# ----- Results ---------------------------------------------------------- #
+with tab_results:
+    st.subheader("Results")
+
+    # Sagittal mode has no Slice mapping tab — the run trigger lives here so the
+    # user can launch the single test directly from the results page.
     if analysis_mode == "sagittal":
-        st.subheader("Run sagittal-localizer QA")
-        st.write(
+        st.caption(
             f"Measures the phantom's superior-inferior length on the sagittal "
             f"scout against the spec nominal "
             f"({series.spec.si_length_mm:.0f} mm ± {series.spec.length_tolerance_mm:.0f} mm)."
@@ -716,41 +881,50 @@ with tab_run:
                                      passed=None, error=str(e))
                 results[tid] = res
             st.session_state.results = results
-            st.success("Done. Open the **Results** tab.")
+            st.rerun()
+
+    if not st.session_state.results:
+        if analysis_mode == "axial":
+            st.info("Confirm slice roles and run automated tests on the "
+                    "**Slice mapping & Run** tab first.")
+        else:
+            st.info("Press **Run S-I length test** above.")
     else:
-        st.subheader("Run ACR QA tests")
-        st.write(
-            "Five automated tests run server-side. Two visual tests "
-            "(high-contrast resolution, low-contrast detectability) need your input."
-        )
+        _render_results_view(test_order, analysis_mode, series,
+                             key_prefix="results_tab")
 
-        if st.button("Run all automated tests", type="primary"):
-            results: dict[str, TestResult] = dict(st.session_state.results)
-            prog = st.progress(0, text="Running QA...")
-            for i, (tid, label, mod) in enumerate(test_order):
-                prog.progress((i + 1) / len(test_order), text=f"Running {label}...")
-                is_user_test = mod in (high_contrast_resolution, low_contrast_detectability)
-                try:
-                    if is_user_test and tid in results and results[tid].measurements:
-                        continue
-                    res = mod.run(series, spec=series.spec)
-                except Exception as e:
-                    res = TestResult(test_id=tid, test_name=label, automated=not is_user_test,
-                                     passed=None, error=str(e))
-                results[tid] = res
-            st.session_state.results = results
-            prog.empty()
-            st.success("Done. Open the **Results** tab.")
-
+# ----- Manual scoring (axial only) ------------------------------------- #
+if tab_manual is not None:
+    with tab_manual:
+        st.subheader("Visual / manual scoring")
         st.info(
-            "**Two tests are scored visually by you** — High-Contrast Spatial Resolution "
-            "and Low-Contrast Object Detectability. The ACR manual defines these as visual "
-            "(human-judged) tests, so the app shows you the correctly-located images and you "
-            "enter what you see below. **They stay at status REVIEW until you score and save — "
-            "that's expected, not an error or failure.**"
+            "**Two ACR tests are visual** — High-Contrast Spatial Resolution and "
+            "Low-Contrast Object Detectability. The ACR manual defines these as "
+            "human-judged tests, so the app shows you the correctly-located "
+            "images and you record what you see. They stay at status REVIEW "
+            "until you score and save."
         )
 
-        st.markdown("### Visual scoring — high-contrast resolution")
+        automated_results = {
+            tid: r for tid, r in st.session_state.results.items()
+            if tid not in _VISUAL_TEST_IDS
+        }
+        if not automated_results:
+            st.warning(
+                "Automated tests haven't been run yet — go to the **Slice "
+                "mapping & Run** tab first. You can still score below if you "
+                "need to, but most physicists only do this once the automated "
+                "tests pass."
+            )
+        elif any(r.status_text() == "FAIL" for r in automated_results.values()):
+            st.warning(
+                "One or more automated tests **failed**. Manual scoring is "
+                "usually a waste of time on a series with a clear acquisition "
+                "or calibration problem — fix the upstream issue first unless "
+                "you need a complete report."
+            )
+
+        st.markdown("### High-contrast resolution")
         st.caption("On slice 1, look at the UL and LR hole arrays in the zoomed crops below.")
         _series_key = id(series)
         _hcr_existing = st.session_state.results.get("high_contrast_resolution")
@@ -787,9 +961,11 @@ with tab_run:
             st.session_state.results["high_contrast_resolution"] = res
             st.success("Saved.")
 
+        st.divider()
+
         lcd_slices = series.spec.lcd_slices
         lcd_range_label = f"{lcd_slices[0]}–{lcd_slices[-1]}"
-        st.markdown("### Visual scoring — low-contrast object detectability")
+        st.markdown("### Low-contrast object detectability")
         st.caption(f"Count complete spokes visible on each of slices {lcd_range_label}.")
         _lcd_existing = st.session_state.results.get("low_contrast_detectability")
         if _lcd_existing is not None and _lcd_existing.annotated_images:
@@ -822,89 +998,6 @@ with tab_run:
             )
             st.session_state.results["low_contrast_detectability"] = res
             st.success("Saved.")
-
-# ----- Results ---------------------------------------------------------- #
-with tab_results:
-    st.subheader("Results")
-    if not st.session_state.results:
-        st.info("Run the QA tests on the previous tab.")
-    else:
-        # ---- Overall verdict banner -----
-        verdict, counts = _overall_status(st.session_state.results)
-        verdict_cls = {
-            "PASS": "PASS", "FAIL": "FAIL", "REVIEW": "REVIEW",
-            "ERROR": "ERROR", "—": "dash",
-        }[verdict]
-        st.markdown(
-            f"""
-            <div class='mri-banner mri-banner-{verdict_cls}'>
-              <div style='font-size:1.05em; font-weight:600;'>
-                Overall verdict: {_status_badge(verdict)}
-              </div>
-              <div class='mri-small' style='margin-top:4px;'>
-                {counts['PASS']} pass · {counts['FAIL']} fail · {counts['REVIEW']} review · {counts['ERROR']} error
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        # ---- Summary table -----
-        rows = []
-        for tid, _, _ in test_order:
-            r: TestResult | None = st.session_state.results.get(tid)
-            if r is None:
-                rows.append({"Test": tid, "Status": "—", "Confidence": "—", "Detail": ""})
-                continue
-            key = r.measurements[0] if r.measurements else None
-            rows.append({
-                "Test": r.test_name,
-                "Status": r.status_text(),
-                "Confidence": r.confidence_label(),
-                "Detail": (f"{key.label}: {key.value} {key.unit}" if key else "") + (
-                    f" · spec {key.spec}" if key and key.spec else ""
-                ),
-                "Error": r.error or "",
-            })
-        st.dataframe(rows, hide_index=True, use_container_width=True)
-
-        st.markdown("### Per-test details")
-        for tid, label, _ in test_order:
-            r: TestResult | None = st.session_state.results.get(tid)
-            if r is None:
-                continue
-            title = f"{r.test_name} — {r.status_text()}"
-            with st.expander(title, expanded=(r.status_text() in ("FAIL", "ERROR") or r.confidence != "high")):
-                st.markdown(
-                    f"{_status_badge(r.status_text())} &nbsp; {_confidence_badge(r.confidence)}",
-                    unsafe_allow_html=True,
-                )
-                if r.warnings:
-                    for w in r.warnings:
-                        st.warning(w)
-                if r.error:
-                    st.error(r.error)
-                if r.notes:
-                    st.caption(r.notes)
-                if r.measurements:
-                    st.dataframe(
-                        [{"Measurement": m.label, "Value": m.value, "Unit": m.unit,
-                          "Spec": m.spec,
-                          "Pass": "" if m.passed is None else ("✓" if m.passed else "✗")}
-                         for m in r.measurements],
-                        hide_index=True, use_container_width=True,
-                    )
-                if r.annotated_images:
-                    img_cols = st.columns(min(2, len(r.annotated_images)))
-                    for i, (cap, im) in enumerate(r.annotated_images):
-                        with img_cols[i % len(img_cols)]:
-                            st.image(im, caption=cap, use_container_width=True)
-
-        st.divider()
-        if st.button("Save this run to History"):
-            snap = _snapshot_run(series, dict(st.session_state.results))
-            st.session_state.history.append(snap)
-            st.success(f"Snapshot saved — {len(st.session_state.history)} run(s) in this session.")
 
 # ----- History (in-browser-session) ------------------------------------- #
 with tab_history:
@@ -959,14 +1052,14 @@ with tab_validation:
                 "- Upload one anonymized ACR axial phantom series\n"
                 "- Confirm metadata strip matches the scanner/series you expected\n"
                 "- Review **Series warnings** (if any)\n"
-                "- Confirm Slice Mapping looks right on the visual previews\n"
-                "- Run all automated tests"
+                "- On **Slice mapping & Run**: confirm slice roles and run the automated tests\n"
+                "- Review **Results**; if passing, score the visual tests on **Manual scoring**"
             )
         else:
             st.markdown(
                 "- Upload one anonymized ACR sagittal localizer image\n"
                 "- Confirm metadata strip matches the scanner/series you expected\n"
-                "- Run the S-I length test"
+                "- Run the S-I length test on **Results**"
             )
     with cols[1]:
         st.markdown(
@@ -979,7 +1072,12 @@ with tab_validation:
 
     st.markdown("### Record this dataset")
     if not st.session_state.results:
-        st.info("Run the QA on the Run QA tab first; then come back to record this dataset.")
+        if analysis_mode == "axial":
+            st.info("Run the automated tests on the **Slice mapping & Run** tab first; "
+                    "then come back to record this dataset.")
+        else:
+            st.info("Run the S-I length test on the **Results** tab first; "
+                    "then come back to record this dataset.")
     else:
         v_cols = st.columns(3)
         ds_name = v_cols[0].text_input(
