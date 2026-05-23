@@ -95,20 +95,37 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         cx, cy, R = geom.cx_px, geom.cy_px, geom.radius_px
 
         # --- 1. Find the slice-thickness void band near the phantom centre ---
-        c_lo, c_hi = int(cx - 0.45 * R), int(cx + 0.45 * R)
-        rprof = img[:, c_lo:c_hi].mean(axis=1)
-        bg = float(np.median(rprof[rprof > 0]))
-        void_mask = rprof < bg * 0.4
-        runs = _contiguous_runs(void_mask)
-        cand = [(s, e) for (s, e) in runs if 3 <= (e - s + 1) <= 20 and s <= cy <= e]
-        if not cand:
-            cand = sorted(
-                [(s, e) for (s, e) in runs if 3 <= (e - s + 1) <= 20],
-                key=lambda rr: abs((rr[0] + rr[1]) / 2 - cy),
-            )
+        # The insert is a short horizontal band that is much dimmer than the
+        # surrounding phantom interior. Earlier versions used a global
+        # `bg = median(rprof[rprof > 0])` baseline, which averaged bright
+        # phantom rows with air rows and produced a void threshold so low that
+        # the insert itself sat above it on lower-contrast acquisitions. We
+        # instead measure the bright-phantom level from the top decile of the
+        # column profile *inside* the phantom row range, then require the void
+        # run to be bracketed above and below by bright rows so non-insert
+        # interior features (resolution insert, slice-position bars) don't win.
+        c_lo, c_hi = int(cx - 0.20 * R), int(cx + 0.20 * R)
+        rprof = _smooth(img[:, c_lo:c_hi].mean(axis=1), 3)
+        H = img.shape[0]
+        y0, y1 = max(0, int(cy - R)), min(H, int(cy + R))
+        bright = float(np.percentile(rprof[y0:y1], 90))
+        void_t = bright * 0.50
+        bright_t = bright * 0.80
+        runs = _contiguous_runs(rprof < void_t)
+        cand = []
+        for s, e in runs:
+            L = e - s + 1
+            if not (3 <= L <= 20):
+                continue
+            above = rprof[max(0, s - 4):s]
+            below = rprof[e + 1:min(len(rprof), e + 5)]
+            if (above >= bright_t).sum() < 3 or (below >= bright_t).sum() < 3:
+                continue
+            cand.append((abs((s + e) / 2 - cy), s, e))
         if not cand:
             raise ValueError("Slice-thickness void band not found near phantom centre.")
-        band_top, band_bot = cand[0]
+        cand.sort()
+        _, band_top, band_bot = cand[0]
 
         # --- 2. Find the septum between the two ramp peaks ---
         cc_lo, cc_hi = int(cx - 0.25 * R), int(cx + 0.25 * R)
