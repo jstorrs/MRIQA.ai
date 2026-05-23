@@ -212,7 +212,9 @@ def detect_present_sizes(series: DicomSeries, spec: PhantomSpec | None = None) -
         img = series.slice(1).astype(np.float32)
         geom = localize_phantom(img)
         bbox, clusters = _detect_resolution_grids(img, geom)
-    except Exception:
+    except (KeyError, ValueError, IndexError):
+        # KeyError: ACR slice 1 not mapped. ValueError: localize_phantom on a
+        # bad image. IndexError: degenerate detector geometry.
         return sizes
     n = _grid_count_from_bbox(bbox, clusters)
     if n is not None and n < len(sizes):
@@ -231,15 +233,14 @@ def run(
     If `user_input` is None the test runs in "needs review" mode and
     returns the zoomed insert images for the technologist to inspect.
     """
-    if spec is None:
-        spec = series.spec
+    spec = spec or series.spec
     res = TestResult(
         test_id="high_contrast_resolution",
         test_name="High-Contrast Spatial Resolution",
         automated=False,
         passed=None,
     )
-    try:
+    with res.capture_failures():
         img = series.slice(1).astype(np.float32)
         geom = localize_phantom(img)
 
@@ -307,7 +308,4 @@ def run(
                 res.passed = bool(p_ul and p_lr)
         else:
             res.notes = "Open the test page in the UI and select the smallest row resolvable in UL and LR."
-    except Exception as exc:
-        res.passed = None
-        res.error = f"{type(exc).__name__}: {exc}"
     return res

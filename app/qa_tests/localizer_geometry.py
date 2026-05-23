@@ -42,7 +42,7 @@ def _measure_si_length(localizer: DicomSeries):
             row_cos_z = abs(iop[2])    # how much the horizontal image axis follows Z
             col_cos_z = abs(iop[5])    # how much the vertical image axis follows Z
             col_is_si = col_cos_z >= row_cos_z
-        except Exception:
+        except (TypeError, ValueError, IndexError):
             pass
 
     ys, xs = np.where(geom.mask)
@@ -76,8 +76,7 @@ def _measure_si_length(localizer: DicomSeries):
 
 def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
     """Run the sagittal-localizer S-I length check on a 1-image series."""
-    if spec is None:
-        spec = series.spec
+    spec = spec or series.spec
     nominal_si = spec.si_length_mm
     tol = spec.length_tolerance_mm
     res = TestResult(
@@ -86,7 +85,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         automated=True,
         passed=True,
     )
-    try:
+    with res.capture_failures():
         si_len, img, _, line = _measure_si_length(series)
         passed = abs(si_len - nominal_si) <= tol
         res.measurements.append(Measurement(
@@ -117,22 +116,13 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
             "DICOM ImageOrientationPatient tag."
         )
 
-        # --- Detection-quality heuristic ---
-        lo, hi = spec.si_length_plausible_mm
-        if si_len < lo or si_len > hi:
-            res.add_warning(
-                f"Measured S-I length {si_len:.1f} mm is far outside the expected range "
-                f"({lo}–{hi} mm) — likely a segmentation error rather than a real geometric "
-                "failure. Check the overlay.",
-                severity="low",
-            )
-        elif abs(si_len - nominal_si) > 10:
-            res.add_warning(
-                f"S-I length deviation from nominal ({si_len:.1f} vs {nominal_si} mm) — "
-                "verify the measurement line crosses the phantom edges cleanly in the overlay.",
-                severity="medium",
-            )
-    except Exception as exc:  # pragma: no cover - defensive
-        res.passed = None
-        res.error = f"{type(exc).__name__}: {exc}"
+        res.flag_if_implausible(
+            "Superior-inferior length",
+            round(si_len, 2),
+            plausible=spec.si_length_plausible_mm,
+            unit="mm",
+            nominal=nominal_si,
+            big_deviation=10,
+            context="Check the overlay.",
+        )
     return res

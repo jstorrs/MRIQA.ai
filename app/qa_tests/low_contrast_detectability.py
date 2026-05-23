@@ -45,7 +45,8 @@ def _lcd_chamber_center(img: np.ndarray, phantom_mask: np.ndarray) -> tuple[floa
     """
     try:
         t = threshold_otsu(img)
-    except Exception:
+    except ValueError:
+        # threshold_otsu raises ValueError on constant images.
         return None
     dark_interior = (img < t) & phantom_mask
     lbl = label(dark_interior)
@@ -63,8 +64,7 @@ def run(
     user_input: dict | None = None,
 ) -> TestResult:
     """`user_input` is a dict {acr_slice_role: spokes_seen, ...}."""
-    if spec is None:
-        spec = series.spec
+    spec = spec or series.spec
     lcd_slices = spec.lcd_slices
     res = TestResult(
         test_id="low_contrast_detectability",
@@ -72,7 +72,7 @@ def run(
         automated=False,
         passed=None,
     )
-    try:
+    with res.capture_failures():
         for acr in lcd_slices:
             slice_img = series.try_slice(acr, spec_fallback=True)
             if slice_img is None:
@@ -153,7 +153,4 @@ def run(
             res.passed = total >= threshold
         else:
             res.notes = "Count complete spokes on each slice and enter values in the UI."
-    except Exception as exc:
-        res.passed = None
-        res.error = f"{type(exc).__name__}: {exc}"
     return res

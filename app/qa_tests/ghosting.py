@@ -37,8 +37,7 @@ def _mm_to_px(mm: float, spacing_mm: float) -> float:
 
 
 def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
-    if spec is None:
-        spec = series.spec
+    spec = spec or series.spec
     large_area = spec.ghosting_large_roi_area_cm2
     air_long_mm = spec.ghosting_air_roi_long_mm
     air_short_mm = spec.ghosting_air_roi_short_mm
@@ -50,7 +49,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         automated=True,
         passed=True,
     )
-    try:
+    with res.capture_failures():
         img = series.slice(7).astype(np.float32)
         ps = series.metadata.pixel_spacing_mm  # (row, col)
         geom = localize_phantom(img)
@@ -136,7 +135,4 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
 
         res.annotated_images.append((f"Slice 7 — ghosting ROIs (PSG={psg_pct:.3f}%)",
                                      render_annotated(img, "", _draw)))
-    except Exception as exc:
-        res.passed = None
-        res.error = f"{type(exc).__name__}: {exc}"
     return res

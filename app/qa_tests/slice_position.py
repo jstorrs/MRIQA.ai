@@ -102,8 +102,7 @@ def _measure_one(img: np.ndarray, ps_row: float):
 
 
 def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
-    if spec is None:
-        spec = series.spec
+    spec = spec or series.spec
     tol = spec.bar_diff_tolerance_mm
     res = TestResult(
         test_id="slice_position",
@@ -111,7 +110,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         automated=True,
         passed=True,
     )
-    try:
+    with res.capture_failures():
         ps = series.metadata.pixel_spacing_mm
         for acr_slice in (1, 11):
             slice_img = series.try_slice(acr_slice)
@@ -158,20 +157,17 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                 render_annotated(img, "", _draw)))
 
             # Detection-quality heuristic
-            if abs(diff) > 15:
-                res.add_warning(
-                    f"Slice {acr_slice}: |Δ| = {abs(diff):.1f} mm is implausibly large — "
-                    "the bar detector may have caught the wrong feature. Check the overlay.",
-                    severity="low",
-                )
+            res.flag_if_implausible(
+                f"Slice {acr_slice} bar-length difference",
+                round(abs(diff), 2),
+                plausible=(0.0, 15.0),
+                unit="mm",
+                context="The bar detector may have caught the wrong feature. Check the overlay.",
+            )
 
-        verdicts = [m.passed for m in res.measurements if m.passed is not None]
-        res.passed = all(verdicts) if verdicts else None
+        res.finalize_pass()
         res.notes = (
             "Left/right bar lengths measured from the shared phantom rim to each bar's "
             f"sub-pixel bottom edge. Δ = left − right; action limit |Δ| ≤ {tol:.0f} mm."
         )
-    except Exception as exc:
-        res.passed = None
-        res.error = f"{type(exc).__name__}: {exc}"
     return res

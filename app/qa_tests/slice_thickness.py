@@ -65,8 +65,7 @@ def _fwhm_with_pos(profile: np.ndarray, x0: int):
 
 
 def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
-    if spec is None:
-        spec = series.spec
+    spec = spec or series.spec
     nominal = spec.nominal_slice_thickness_mm
     tol = spec.slice_thickness_tolerance_mm
     res = TestResult(
@@ -75,7 +74,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         automated=True,
         passed=True,
     )
-    try:
+    with res.capture_failures():
         img = series.slice(1).astype(np.float32)
         ps = series.metadata.pixel_spacing_mm   # (row, col)
         geom = localize_phantom(img)
@@ -183,12 +182,13 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
             render_annotated(img, "", _draw_zoom, figsize=(8.0, 3.0))))
 
         # --- 4. Detection-quality heuristics ---
-        if thickness_mm < 1.0 or thickness_mm > 15.0:
-            res.add_warning(
-                f"Measured thickness {thickness_mm:.2f} mm is implausible — the ramp "
-                "detector may have failed. Check the overlay.",
-                severity="low",
-            )
+        res.flag_if_implausible(
+            "Measured slice thickness",
+            round(thickness_mm, 2),
+            plausible=(1.0, 15.0),
+            unit="mm",
+            context="The ramp detector may have failed. Check the overlay.",
+        )
         if top_mm < 10 or bot_mm < 10:
             res.add_warning(
                 f"A ramp FWHM is very short (top={top_mm:.1f} mm, bot={bot_mm:.1f} mm) — "
@@ -203,7 +203,4 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                     "offset from the ramp crossing, or a ramp was mis-detected.",
                     severity="medium",
                 )
-    except Exception as exc:
-        res.passed = None
-        res.error = f"{type(exc).__name__}: {exc}"
     return res

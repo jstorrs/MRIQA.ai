@@ -62,8 +62,7 @@ def _measure_length_along(
 
 
 def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
-    if spec is None:
-        spec = series.spec
+    spec = spec or series.spec
     nominal_d = spec.diameter_mm
     tol = spec.length_tolerance_mm
     res = TestResult(
@@ -72,7 +71,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         automated=True,
         passed=True,
     )
-    try:
+    with res.capture_failures():
         ps = series.metadata.pixel_spacing_mm
 
         # ----- Axial slice 1: two diameters -----
@@ -134,9 +133,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
             "Slice 5: four diameters",
             render_annotated(img5, "Slice 5 — geometric accuracy", _draw_slice5)))
 
-        # Overall pass = all measurements that have a pass/fail verdict
-        verdicts = [m.passed for m in res.measurements if m.passed is not None]
-        res.passed = all(verdicts) if verdicts else None
+        res.finalize_pass()
         res.notes = (
             f"Axial diameters (slices 1 & 5) nominal {nominal_d:.0f} mm via "
             f"half-max edges through the centroid; tolerance ±{tol} mm. "
@@ -144,23 +141,14 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
             "localizer (run that analysis on a 1-image series)."
         )
 
-        # --- Detection-quality heuristics ---
-        lo, hi = spec.diameter_plausible_mm
         for m in res.measurements:
-            if m.value < lo or m.value > hi:
-                res.add_warning(
-                    f"{m.label}: measured {m.value} mm is far outside the expected range "
-                    f"({lo}–{hi} mm) — likely an edge-detection error, not a real geometric "
-                    "failure. Check the overlay.",
-                    severity="low",
-                )
-            elif abs(m.value - nominal_d) > 10:
-                res.add_warning(
-                    f"{m.label}: deviation from nominal ({m.value} vs {nominal_d} mm) — verify "
-                    "the measurement line crosses the phantom edges cleanly in the overlay.",
-                    severity="medium",
-                )
-    except Exception as exc:  # pragma: no cover - defensive
-        res.passed = None
-        res.error = f"{type(exc).__name__}: {exc}"
+            res.flag_if_implausible(
+                m.label,
+                m.value,
+                plausible=spec.diameter_plausible_mm,
+                unit="mm",
+                nominal=nominal_d,
+                big_deviation=10,
+                context="Check the overlay.",
+            )
     return res
