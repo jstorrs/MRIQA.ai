@@ -313,6 +313,9 @@ st.caption(
 # Sidebar — uploader + guidance                                               #
 # --------------------------------------------------------------------------- #
 
+_PHANTOM_OPTIONS = [(s.short_name, s.name) for s in PHANTOMS.values()]
+
+
 with st.sidebar:
     st.header("Upload phantom DICOMs")
     st.markdown(
@@ -325,24 +328,12 @@ with st.sidebar:
         "The app runs one of two analyses depending on the series you pick:"
         "<br>• <b>Axial series</b> — 11 axial slices (T1 or T2 ACR protocol)."
         "<br>• <b>Sagittal localizer</b> — single sagittal scout image."
+        "<br><br>Phantom model + field-strength inputs live on the "
+        "<b>Analysis</b> tab so the algorithm inputs sit together."
         "</div>",
         unsafe_allow_html=True,
     )
     st.divider()
-
-    st.markdown("**Phantom**")
-    _phantom_options = [("auto", "Auto-detect from slice 1")] + [
-        (s.short_name, s.name) for s in PHANTOMS.values()
-    ]
-    phantom_choice = st.selectbox(
-        "ACR phantom model",
-        options=[opt[0] for opt in _phantom_options],
-        format_func=lambda k: dict(_phantom_options)[k],
-        index=0,
-        help="Auto picks the spec whose nominal diameter is closest to the "
-             "phantom measured on slice 1. Large = 190 mm Ø / 148 mm S-I; "
-             "Medium = 165 mm Ø / 134 mm S-I.",
-    )
 
     uploaded = st.file_uploader(
         "Drop a .zip of the series, or select .dcm files",
@@ -351,15 +342,6 @@ with st.sidebar:
         help="Accepts a folder zip or individual .dcm files. The series picker "
              "shows everything found in the upload — pick the axial protocol "
              "for the full QA or the sagittal scout for the S-I length check.",
-    )
-
-    st.markdown("**Scanner field strength**")
-    field_choice = st.selectbox(
-        "Used for the PIU / low-contrast action limits",
-        ["Auto (from DICOM)", "1.5 T", "3.0 T"],
-        index=0,
-        help="If the DICOM is missing the MagneticFieldStrength tag (shows B0 = 0.0 T), "
-             "set it here so the correct ACR thresholds apply.",
     )
 
     with st.expander("Advanced — load from a local folder"):
@@ -467,38 +449,8 @@ elif uploaded:
     except Exception as exc:
         _show_load_error(exc)
 
-# Apply the selected phantom spec to the active series
-if series is not None:
-    # Loader attaches LARGE by default; this lets the user pick Medium without
-    # having to re-upload. Note: Large and Medium share the same 11-slice ACR
-    # mapping, so series.acr_slice_map does not need to be recomputed. If a
-    # future spec introduces a different protocol, recompute via
-    # default_acr_slice_map(n_slices, new_spec) here — but only when the user
-    # has not customized the mapping in the Slice Mapping tab.
-    if phantom_choice == "auto":
-        idx0 = series.acr_slice_map.get(1, 0)
-        spec_auto, measured_mm = detect_phantom_spec(
-            series.pixel_array[idx0], series.metadata.pixel_spacing_mm,
-        )
-        series.spec = spec_auto
-        if measured_mm == measured_mm:  # not NaN
-            st.sidebar.success(
-                f"Auto-detected **{spec_auto.name}** "
-                f"(measured Ø {measured_mm:.0f} mm vs nominal {spec_auto.diameter_mm:.0f} mm)."
-            )
-        else:
-            st.sidebar.warning(
-                f"Auto-detect could not segment the phantom; falling back to {spec_auto.name}."
-            )
-    else:
-        series.spec = PHANTOMS.get(phantom_choice, LARGE)
-    # Apply a manual field-strength override (used for PIU / low-contrast limits)
-    # when the DICOM tag is missing or the user wants to force a value.
-    if field_choice == "1.5 T":
-        series.metadata.field_strength_t = 1.5
-    elif field_choice == "3.0 T":
-        series.metadata.field_strength_t = 3.0
-    # "Auto" leaves the DICOM-derived value as-is.
+# Phantom-spec and field-strength selection happen on the Analysis tab so the
+# inputs to the automated algorithms sit together. See `_render_analysis_inputs`.
 
 # --------------------------------------------------------------------------- #
 # Landing page when no series is loaded                                       #
@@ -523,7 +475,7 @@ if series is None:
     with c3:
         st.markdown("### 3. Run + Report")
         st.markdown(
-            "Axial runs five automated tests (Slice mapping & Run) and, on a "
+            "Axial runs five automated tests (Analysis tab) and, on a "
             "separate **Manual scoring** tab, two visual tests. Sagittal runs "
             "one automated test. Export a PDF + CSV when done."
         )
@@ -622,12 +574,12 @@ if st.session_state.series_warnings and analysis_mode == "axial":
 
 if analysis_mode == "axial":
     tab_viewer, tab_slices, tab_results, tab_manual, tab_history, tab_validation, tab_export = st.tabs(
-        ["Viewer", "Slice mapping & Run", "Results", "Manual scoring",
+        ["Viewer", "Analysis", "Results", "Manual scoring",
          "History", "Validation", "Export"]
     )
 else:
     tab_viewer, tab_results, tab_history, tab_validation, tab_export = st.tabs(
-        ["Viewer", "Results", "History", "Validation", "Export"]
+        ["Viewer", "Analysis", "History", "Validation", "Export"]
     )
     tab_slices = None
     tab_manual = None
@@ -672,10 +624,60 @@ with tab_viewer:
 _VISUAL_TEST_IDS = {"high_contrast_resolution", "low_contrast_detectability"}
 
 
+def _render_analysis_inputs(series, *, key_prefix: str):
+    """Render the phantom + field-strength inputs at the top of an Analysis
+    tab and apply them to `series` in place. Defaults are seeded from the
+    loaded series — phantom from the segmented left-right width (robust to
+    A-P bubbles; also valid on a sagittal scout where the axial circumference
+    runs L-R), field strength from the DICOM tag snapped to 1.5 / 3.0 T.
+    User overrides stick until a different series is loaded.
+
+    `key_prefix` keeps Streamlit widget keys unique when the same controls
+    appear on more than one tab body within a single run.
+    """
+    series_uid = st.session_state.get("loaded_series_uid") or str(id(series))
+    seed_key = f"{key_prefix}_seeded_for"
+
+    # Re-seed the dropdowns whenever a new series is loaded so the auto-detected
+    # values appear as the pre-selected entries. Subsequent reruns within the
+    # same series leave the user's override alone.
+    if st.session_state.get(seed_key) != series_uid:
+        idx0 = series.acr_slice_map.get(1, 0)
+        spec_auto, _ = detect_phantom_spec(
+            series.pixel_array[idx0], series.metadata.pixel_spacing_mm,
+        )
+        st.session_state[f"{key_prefix}_phantom"] = spec_auto.short_name
+        b0 = series.metadata.field_strength_t
+        st.session_state[f"{key_prefix}_field"] = "3.0 T" if b0 >= 2.0 else "1.5 T"
+        st.session_state[seed_key] = series_uid
+
+    c1, c2 = st.columns(2)
+    with c1:
+        choice = st.selectbox(
+            "ACR phantom model",
+            options=[opt[0] for opt in _PHANTOM_OPTIONS],
+            format_func=lambda k: dict(_PHANTOM_OPTIONS)[k],
+            key=f"{key_prefix}_phantom",
+            help="Pre-selected from the phantom's segmented left-right width. "
+                 "Large = 190 mm Ø / 148 mm S-I; Medium = 165 mm Ø / 134 mm S-I.",
+        )
+    with c2:
+        fld = st.selectbox(
+            "Scanner field strength",
+            ["1.5 T", "3.0 T"],
+            key=f"{key_prefix}_field",
+            help="Pre-selected from the DICOM MagneticFieldStrength tag "
+                 "(snapped to the nearest of 1.5 / 3.0 T).",
+        )
+
+    series.spec = PHANTOMS.get(choice, LARGE)
+    series.metadata.field_strength_t = 1.5 if fld == "1.5 T" else 3.0
+
+
 def _render_results_view(test_order, analysis_mode, series, *, key_prefix: str):
     """Render the verdict banner + summary table + per-test details + a
     save-to-history button. Shared between the Results tab and the inline
-    view on the Slice mapping & Run tab. `key_prefix` keeps Streamlit widget
+    view on the Analysis tab. `key_prefix` keeps Streamlit widget
     keys unique when the same view is rendered in two places."""
     # Axial: nudge the user toward manual scoring once automated results are
     # in but the visual tests are still pending. If any automated test FAILED,
@@ -807,9 +809,18 @@ def _run_automated_tests(series, test_order):
     return out
 
 
-# ----- Slice mapping & Run (axial only) -------------------------------- #
+# ----- Analysis (axial: slice mapping + automated run) ----------------- #
 if tab_slices is not None:
     with tab_slices:
+        st.subheader("Analysis inputs")
+        st.caption(
+            "Everything above the **Run all automated tests** button is an "
+            "input to the algorithms. The dropdowns are pre-selected from the "
+            "loaded series — change them only if the defaults are wrong."
+        )
+        _render_analysis_inputs(series, key_prefix="axial_inputs")
+
+        st.divider()
         st.subheader("ACR slice role mapping")
         st.write(
             "ACR procedures reference **slice 1** (bars/wedges), **5** (central), "
@@ -859,13 +870,24 @@ if tab_slices is not None:
             _render_results_view(test_order, analysis_mode, series,
                                  key_prefix="slice_run_tab")
 
-# ----- Results ---------------------------------------------------------- #
+# ----- Results / sagittal Analysis -------------------------------------- #
 with tab_results:
-    st.subheader("Results")
+    if analysis_mode == "axial":
+        st.subheader("Results")
 
-    # Sagittal mode has no Slice mapping tab — the run trigger lives here so the
-    # user can launch the single test directly from the results page.
+    # Sagittal mode has no separate slice-mapping step — the run trigger plus
+    # the algorithm inputs live here on the Analysis tab.
     if analysis_mode == "sagittal":
+        st.subheader("Analysis inputs")
+        st.caption(
+            "Everything above the **Run S-I length test** button is an input "
+            "to the algorithm. The dropdowns are pre-selected from the loaded "
+            "series — change them only if the defaults are wrong."
+        )
+        _render_analysis_inputs(series, key_prefix="sagittal_inputs")
+
+        st.divider()
+        st.subheader("Run")
         st.caption(
             f"Measures the phantom's superior-inferior length on the sagittal "
             f"scout against the spec nominal "
@@ -886,7 +908,7 @@ with tab_results:
     if not st.session_state.results:
         if analysis_mode == "axial":
             st.info("Confirm slice roles and run automated tests on the "
-                    "**Slice mapping & Run** tab first.")
+                    "**Analysis** tab first.")
         else:
             st.info("Press **Run S-I length test** above.")
     else:
@@ -911,10 +933,9 @@ if tab_manual is not None:
         }
         if not automated_results:
             st.warning(
-                "Automated tests haven't been run yet — go to the **Slice "
-                "mapping & Run** tab first. You can still score below if you "
-                "need to, but most physicists only do this once the automated "
-                "tests pass."
+                "Automated tests haven't been run yet — go to the **Analysis** "
+                "tab first. You can still score below if you need to, but most "
+                "physicists only do this once the automated tests pass."
             )
         elif any(r.status_text() == "FAIL" for r in automated_results.values()):
             st.warning(
@@ -1052,14 +1073,14 @@ with tab_validation:
                 "- Upload one anonymized ACR axial phantom series\n"
                 "- Confirm metadata strip matches the scanner/series you expected\n"
                 "- Review **Series warnings** (if any)\n"
-                "- On **Slice mapping & Run**: confirm slice roles and run the automated tests\n"
+                "- On **Analysis**: confirm slice roles and run the automated tests\n"
                 "- Review **Results**; if passing, score the visual tests on **Manual scoring**"
             )
         else:
             st.markdown(
                 "- Upload one anonymized ACR sagittal localizer image\n"
                 "- Confirm metadata strip matches the scanner/series you expected\n"
-                "- Run the S-I length test on **Results**"
+                "- Run the S-I length test on **Analysis**"
             )
     with cols[1]:
         st.markdown(
@@ -1073,10 +1094,10 @@ with tab_validation:
     st.markdown("### Record this dataset")
     if not st.session_state.results:
         if analysis_mode == "axial":
-            st.info("Run the automated tests on the **Slice mapping & Run** tab first; "
+            st.info("Run the automated tests on the **Analysis** tab first; "
                     "then come back to record this dataset.")
         else:
-            st.info("Run the S-I length test on the **Results** tab first; "
+            st.info("Run the S-I length test on the **Analysis** tab first; "
                     "then come back to record this dataset.")
     else:
         v_cols = st.columns(3)

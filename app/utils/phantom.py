@@ -79,16 +79,25 @@ def detect_phantom_spec(
     pixel_spacing_mm: tuple[float, float],
     candidates: dict[str, PhantomSpec] | None = None,
 ) -> tuple[PhantomSpec, float]:
-    """Pick the phantom spec whose nominal diameter is closest to the diameter
-    measured on `image` (typically ACR slice 1).
+    """Pick the phantom spec whose nominal diameter is closest to the
+    **left-right width** measured on `image` (typically ACR slice 1, or the
+    sagittal localizer where the axial circumference also runs L-R).
 
-    Returns ``(spec, measured_diameter_mm)``. Falls back to ``default_phantom``
+    L-R is used rather than top-bottom or an area-equivalent diameter because
+    air bubbles at the top of the phantom can shrink the mask along the
+    A-P / S-I axis and skew an area-based estimate.
+
+    Returns ``(spec, measured_width_mm)``. Falls back to ``default_phantom``
     if segmentation fails.
     """
     pool = candidates if candidates is not None else PHANTOMS
     try:
         geom = localize_phantom(image)
-        measured_mm = 2.0 * geom.radius_mm(pixel_spacing_mm)
+        xs = np.where(geom.mask)[1]
+        if xs.size == 0:
+            return default_phantom(), float("nan")
+        width_px = float(xs.max() - xs.min() + 1)
+        measured_mm = width_px * pixel_spacing_mm[1]
     except Exception:
         return default_phantom(), float("nan")
     best = min(pool.values(), key=lambda s: abs(s.diameter_mm - measured_mm))
