@@ -6,6 +6,23 @@ import numpy as np
 from scipy.interpolate import interp1d
 
 
+def contiguous_runs(mask) -> list[tuple[int, int]]:
+    """Return inclusive ``(start, end)`` index pairs for every run of truthy
+    values in a 1D sequence.
+    """
+    runs: list[tuple[int, int]] = []
+    start: int | None = None
+    for i, v in enumerate(mask):
+        if v and start is None:
+            start = i
+        elif not v and start is not None:
+            runs.append((start, i - 1))
+            start = None
+    if start is not None:
+        runs.append((start, len(mask) - 1))
+    return runs
+
+
 def circular_roi_mask(shape: tuple[int, int], cy: float, cx: float, radius_px: float) -> np.ndarray:
     """Return a boolean mask for a circular ROI."""
     yy, xx = np.ogrid[: shape[0], : shape[1]]

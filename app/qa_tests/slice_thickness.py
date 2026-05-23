@@ -35,6 +35,7 @@ from __future__ import annotations
 import numpy as np
 
 from ..io_dicom.dicom_loader import DicomSeries
+from ..utils.geometry import contiguous_runs
 from ..utils.phantom import localize_phantom
 from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
@@ -43,20 +44,6 @@ from .base import Measurement, TestResult
 
 def _smooth(p: np.ndarray, n: int = 3) -> np.ndarray:
     return np.convolve(p.astype(float), np.ones(n) / n, mode="same")
-
-
-def _contiguous_runs(mask: np.ndarray):
-    runs = []
-    start = None
-    for i, v in enumerate(mask):
-        if v and start is None:
-            start = i
-        elif not v and start is not None:
-            runs.append((start, i - 1))
-            start = None
-    if start is not None:
-        runs.append((start, len(mask) - 1))
-    return runs
 
 
 def _fwhm_with_pos(profile: np.ndarray, x0: int):
@@ -111,7 +98,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         bright = float(np.percentile(rprof[y0:y1], 90))
         void_t = bright * 0.50
         bright_t = bright * 0.80
-        runs = _contiguous_runs(rprof < void_t)
+        runs = contiguous_runs(rprof < void_t)
         cand = []
         for s, e in runs:
             L = e - s + 1

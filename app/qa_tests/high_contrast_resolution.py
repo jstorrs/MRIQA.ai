@@ -23,6 +23,7 @@ from __future__ import annotations
 import numpy as np
 
 from ..io_dicom.dicom_loader import DicomSeries
+from ..utils.geometry import contiguous_runs
 from ..utils.phantom import localize_phantom
 from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
@@ -82,16 +83,7 @@ def _cluster_runs(active, min_gap_for_split):
 
     Returns a list of (start, end_inclusive) tuples.
     """
-    runs = []
-    start = None
-    for i, v in enumerate(active):
-        if v and start is None:
-            start = i
-        elif not v and start is not None:
-            runs.append((start, i - 1))
-            start = None
-    if start is not None:
-        runs.append((start, len(active) - 1))
+    runs = contiguous_runs(active)
     if not runs:
         return []
     merged = [runs[0]]

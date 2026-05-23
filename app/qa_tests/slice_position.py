@@ -33,6 +33,7 @@ from __future__ import annotations
 import numpy as np
 
 from ..io_dicom.dicom_loader import DicomSeries
+from ..utils.geometry import contiguous_runs
 from ..utils.phantom import localize_phantom
 from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
@@ -58,18 +59,13 @@ def _measure_one(img: np.ndarray, ps_row: float):
         if c < 0 or c >= img.shape[1]:
             continue
         seg = img[r0:r1, c]
-        dark = seg < half
-        i, n = 0, len(dark)
-        while i < n and not dark[i]:
-            i += 1
-        if i >= n:
+        runs = contiguous_runs(seg < half)
+        if not runs:
             continue
-        j = i
-        while j < n and dark[j]:
-            j += 1
-        if (j - i) >= 12:
+        i, j = runs[0]   # first dark run below the rim (inclusive endpoints)
+        if (j - i + 1) >= 12:
             col_top[c] = r0 + i
-            col_bot[c] = r0 + (j - 1)
+            col_bot[c] = r0 + j
 
     cols = sorted(col_bot)
     if len(cols) < 4:
