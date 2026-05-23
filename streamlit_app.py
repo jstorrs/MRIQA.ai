@@ -624,13 +624,28 @@ with tab_viewer:
 _VISUAL_TEST_IDS = {"high_contrast_resolution", "low_contrast_detectability"}
 
 
-def _render_analysis_inputs(series, *, key_prefix: str):
-    """Render the phantom + field-strength inputs at the top of an Analysis
-    tab and apply them to `series` in place. Defaults are seeded from the
-    loaded series — phantom from the segmented left-right width (robust to
-    A-P bubbles; also valid on a sagittal scout where the axial circumference
-    runs L-R), field strength from the DICOM tag snapped to 1.5 / 3.0 T.
-    User overrides stick until a different series is loaded.
+def _detect_sequence_type(tr_ms: float, te_ms: float) -> str:
+    """Classify an ACR phantom acquisition as T1 or T2 from TR/TE.
+
+    The ACR axial protocol nominates TR≈500 / TE≈20 for T1 and
+    TR≈2000 / TE≈80 for T2, so TE alone is a clean separator. TR is
+    used as a tiebreaker when TE is missing.
+    """
+    if te_ms and te_ms > 0:
+        return "T2" if te_ms >= 40.0 else "T1"
+    if tr_ms and tr_ms > 0:
+        return "T2" if tr_ms >= 1000.0 else "T1"
+    return "T1"
+
+
+def _render_analysis_inputs(series, *, key_prefix: str, show_sequence: bool = True):
+    """Render the phantom + field-strength (+ sequence, axial only) inputs at
+    the top of an Analysis tab and apply them to `series` in place. Defaults
+    are seeded from the loaded series — phantom from the segmented left-right
+    width (robust to A-P bubbles; also valid on a sagittal scout where the
+    axial circumference runs L-R), field strength from the DICOM tag snapped
+    to 1.5 / 3.0 T, and the sequence type from TR / TE. User overrides stick
+    until a different series is loaded.
 
     `key_prefix` keeps Streamlit widget keys unique when the same controls
     appear on more than one tab body within a single run.
@@ -649,10 +664,13 @@ def _render_analysis_inputs(series, *, key_prefix: str):
         st.session_state[f"{key_prefix}_phantom"] = spec_auto.short_name
         b0 = series.metadata.field_strength_t
         st.session_state[f"{key_prefix}_field"] = "3.0 T" if b0 >= 2.0 else "1.5 T"
+        st.session_state[f"{key_prefix}_sequence"] = _detect_sequence_type(
+            series.metadata.repetition_time_ms, series.metadata.echo_time_ms,
+        )
         st.session_state[seed_key] = series_uid
 
-    c1, c2 = st.columns(2)
-    with c1:
+    cols = st.columns(3 if show_sequence else 2)
+    with cols[0]:
         choice = st.selectbox(
             "ACR phantom model",
             options=[opt[0] for opt in _PHANTOM_OPTIONS],
@@ -661,7 +679,7 @@ def _render_analysis_inputs(series, *, key_prefix: str):
             help="Pre-selected from the phantom's segmented left-right width. "
                  "Large = 190 mm Ø / 148 mm S-I; Medium = 165 mm Ø / 134 mm S-I.",
         )
-    with c2:
+    with cols[1]:
         fld = st.selectbox(
             "Scanner field strength",
             ["1.5 T", "3.0 T"],
@@ -669,6 +687,17 @@ def _render_analysis_inputs(series, *, key_prefix: str):
             help="Pre-selected from the DICOM MagneticFieldStrength tag "
                  "(snapped to the nearest of 1.5 / 3.0 T).",
         )
+    if show_sequence:
+        with cols[2]:
+            seq = st.selectbox(
+                "Axial sequence",
+                ["T1", "T2"],
+                key=f"{key_prefix}_sequence",
+                help="Pre-selected from TR / TE (T2 when TE ≥ 40 ms). At 1.5 T "
+                     "the ACR LCD threshold is sequence-dependent: 30 spokes "
+                     "for T1, 25 for T2.",
+            )
+        series.metadata.sequence = seq
 
     series.spec = PHANTOMS.get(choice, LARGE)
     series.metadata.field_strength_t = 1.5 if fld == "1.5 T" else 3.0
@@ -884,7 +913,8 @@ with tab_results:
             "to the algorithm. The dropdowns are pre-selected from the loaded "
             "series — change them only if the defaults are wrong."
         )
-        _render_analysis_inputs(series, key_prefix="sagittal_inputs")
+        _render_analysis_inputs(series, key_prefix="sagittal_inputs",
+                                show_sequence=False)
 
         st.divider()
         st.subheader("Run")

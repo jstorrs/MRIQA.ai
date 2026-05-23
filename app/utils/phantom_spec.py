@@ -77,8 +77,9 @@ class PhantomSpec:
 
     # --- slices 8–11: low-contrast object detectability (LCD) ---
     lcd_slices: tuple[int, ...]            # ACR slice roles containing spoke patterns
-    lcd_threshold_3t: int                  # total spokes required at ≥ 3 T
-    lcd_threshold_lowfield: int            # total spokes required at < 3 T
+    lcd_threshold_3t: int                  # total spokes required at ≥ 3 T (T1 & T2 the same)
+    lcd_threshold_lowfield_t1: int         # total spokes required at < 3 T for an ACR-T1 scan
+    lcd_threshold_lowfield_t2: int         # total spokes required at < 3 T for an ACR-T2 scan
 
 
 LARGE = PhantomSpec(
@@ -123,8 +124,9 @@ LARGE = PhantomSpec(
     ghosting_threshold_percent=3.0,
     # § Table 5 — Large LCD limits (total spokes across slices 8–11)
     lcd_slices=(8, 9, 10, 11),
-    lcd_threshold_3t=37,         # ≥ 37 total spokes at 3 T (T1 & T2 the same)
-    lcd_threshold_lowfield=30,   # ≥ 30 total spokes at 1.5 T (ACR-T1; T2 is ≥ 25)
+    lcd_threshold_3t=37,            # ≥ 37 total spokes at 3 T (T1 & T2 the same)
+    lcd_threshold_lowfield_t1=30,   # ≥ 30 total spokes at 1.5 T for ACR-T1
+    lcd_threshold_lowfield_t2=25,   # ≥ 25 total spokes at 1.5 T for ACR-T2
 )
 
 
@@ -170,8 +172,9 @@ MEDIUM = PhantomSpec(
     ghosting_threshold_percent=3.0,
     # § Table 5 — Medium LCD limits
     lcd_slices=(8, 9, 10, 11),
-    lcd_threshold_3t=37,         # ≥ 37 total spokes at 3 T (T1 & T2 the same)
-    lcd_threshold_lowfield=30,   # ≥ 30 total spokes at 1.5 T (ACR-T1; T2 is ≥ 25)
+    lcd_threshold_3t=37,            # ≥ 37 total spokes at 3 T (T1 & T2 the same)
+    lcd_threshold_lowfield_t1=30,   # ≥ 30 total spokes at 1.5 T for ACR-T1
+    lcd_threshold_lowfield_t2=25,   # ≥ 25 total spokes at 1.5 T for ACR-T2
 )
 
 

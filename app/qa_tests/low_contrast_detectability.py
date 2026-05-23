@@ -97,7 +97,12 @@ def run(
                     unit="spokes",
                 ))
             is_3t = series.metadata.field_strength_t >= 3.0 - 0.05
-            threshold = spec.lcd_threshold_3t if is_3t else spec.lcd_threshold_lowfield
+            if is_3t:
+                threshold = spec.lcd_threshold_3t
+            elif series.metadata.sequence == "T2":
+                threshold = spec.lcd_threshold_lowfield_t2
+            else:
+                threshold = spec.lcd_threshold_lowfield_t1
             slice_range = f"{lcd_slices[0]}–{lcd_slices[-1]}"
             res.measurements.append(Measurement(
                 label=f"Total spokes (slices {slice_range})",
