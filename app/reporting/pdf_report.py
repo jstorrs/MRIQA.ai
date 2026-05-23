@@ -147,11 +147,11 @@ class _ReportDoc(BaseDocTemplate):
 # --------------------------------------------------------------------------- #
 
 
-def _header_band() -> Table:
+def _header_band(spec_name: str) -> Table:
     """The thin brand band at the top of the cover."""
     band = Table([[Paragraph(
-        "<para align='left'><font color='white' size='14'><b>MRIQA.ai</b></font>"
-        "&nbsp;&nbsp;&nbsp;<font color='white' size='10'>ACR Large Phantom QA report</font></para>",
+        f"<para align='left'><font color='white' size='14'><b>MRIQA.ai</b></font>"
+        f"&nbsp;&nbsp;&nbsp;<font color='white' size='10'>{spec_name} QA report</font></para>",
         ParagraphStyle("brand", textColor=colors.white),
     )]], colWidths=[7.3 * inch])
     band.setStyle(TableStyle([
@@ -169,7 +169,7 @@ def _meta_block(series: DicomSeries) -> Table:
     data = [
         ["Site / Org",        "—",                                "Manufacturer", md.manufacturer or "—"],
         ["Scanner",           md.model or "—",                    "Field",        f"{md.field_strength_t:.1f} T"],
-        ["Phantom",           "ACR Large MRI Phantom",            "Sequence",     md.sequence],
+        ["Phantom",           series.spec.name,                   "Sequence",     md.sequence],
         ["Patient / Phantom", md.patient_name or "—",             "Study date",   md.study_date or "—"],
         ["Patient ID",        md.patient_id or "—",               "Series",       f"{md.series_description} (#{md.series_number})"],
         ["Pixel spacing",     f"{md.pixel_spacing_mm[0]:.3f} × {md.pixel_spacing_mm[1]:.3f} mm",
@@ -320,7 +320,7 @@ def write_pdf(
             "generated_at": generated_at,
             "signature": signature,
         },
-        title="ACR Large Phantom QA Report",
+        title=f"{series.spec.name} QA Report",
     )
 
     styles = getSampleStyleSheet()
@@ -331,7 +331,7 @@ def write_pdf(
     story = []
 
     # ----- Cover -----
-    story.append(_header_band())
+    story.append(_header_band(series.spec.name))
     story.append(Spacer(1, 10))
     story.append(_meta_block(series))
     story.append(Spacer(1, 12))

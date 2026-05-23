@@ -34,10 +34,9 @@ import numpy as np
 
 from ..io_dicom.dicom_loader import DicomSeries
 from ..utils.phantom import localize_phantom
+from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
-
-BAR_DIFF_TOLERANCE_MM = 5.0
 
 
 def _measure_one(img: np.ndarray, ps_row: float):
@@ -106,7 +105,10 @@ def _measure_one(img: np.ndarray, ps_row: float):
     }
 
 
-def run(series: DicomSeries) -> TestResult:
+def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
+    if spec is None:
+        spec = series.spec
+    tol = spec.bar_diff_tolerance_mm
     res = TestResult(
         test_id="slice_position",
         test_name="Slice Position Accuracy",
@@ -125,17 +127,17 @@ def run(series: DicomSeries) -> TestResult:
                 res.measurements.append(Measurement(
                     label=f"Slice {acr_slice} bar-length difference",
                     value=float("nan"), unit="mm",
-                    spec=f"|Δ| ≤ {BAR_DIFF_TOLERANCE_MM} mm", passed=None,
+                    spec=f"|Δ| ≤ {tol} mm", passed=None,
                 ))
                 res.add_warning(f"Slice {acr_slice}: {exc}", severity="medium")
                 continue
 
             diff = r["bar_diff"]
-            passed = abs(diff) <= BAR_DIFF_TOLERANCE_MM
+            passed = abs(diff) <= tol
             res.measurements.append(Measurement(
                 label=f"Slice {acr_slice} bar-length difference",
                 value=round(diff, 2), unit="mm",
-                spec=f"|Δ| ≤ {BAR_DIFF_TOLERANCE_MM} mm", passed=passed,
+                spec=f"|Δ| ≤ {tol} mm", passed=passed,
             ))
 
             def _draw(ax, r=r, acr_slice=acr_slice):
@@ -170,7 +172,7 @@ def run(series: DicomSeries) -> TestResult:
         res.passed = all(verdicts) if verdicts else None
         res.notes = (
             "Left/right bar lengths measured from the shared phantom rim to each bar's "
-            "sub-pixel bottom edge. Δ = left − right; action limit |Δ| ≤ 5 mm."
+            f"sub-pixel bottom edge. Δ = left − right; action limit |Δ| ≤ {tol:.0f} mm."
         )
     except Exception as exc:
         res.passed = None

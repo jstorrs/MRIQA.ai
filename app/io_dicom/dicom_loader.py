@@ -23,6 +23,8 @@ import numpy as np
 import pydicom
 from pydicom.dataset import FileDataset
 
+from ..utils.phantom_spec import PhantomSpec, default_phantom
+
 
 @dataclass
 class SeriesMetadata:
@@ -55,8 +57,11 @@ class DicomSeries:
     # Mapping from "ACR slice role" (e.g. 1, 5, 7, 11) -> physical slice index 0..n-1
     acr_slice_map: dict[int, int] = field(default_factory=dict)
     # Optional sagittal localizer series, attached for the geometric-accuracy
-    # S-I length (148 mm) measurement which cannot be done on an axial slice.
+    # S-I length (nominal per spec) measurement which cannot be done on an axial slice.
     localizer: "DicomSeries | None" = field(default=None, repr=False)
+    # Phantom model (Large, Medium, …) — every QA test reads spec from here so
+    # geometry/threshold constants are not hardcoded per test.
+    spec: PhantomSpec = field(default_factory=default_phantom)
 
     def slice(self, acr_role: int) -> np.ndarray:
         """Return the 2D pixel array for the given ACR slice role (1-based)."""
@@ -216,14 +221,16 @@ def load_series(sources: Iterable) -> DicomSeries:
     slice_locations = [float(getattr(ds, "SliceLocation", i)) for i, ds in enumerate(datasets)]
     instance_numbers = [int(getattr(ds, "InstanceNumber", i + 1)) for i, ds in enumerate(datasets)]
 
+    spec = default_phantom()
     series = DicomSeries(
         pixel_array=volume,
         slice_locations_mm=slice_locations,
         instance_numbers=instance_numbers,
         metadata=meta,
         datasets=datasets,
+        spec=spec,
     )
-    series.acr_slice_map = default_acr_slice_map(volume.shape[0])
+    series.acr_slice_map = default_acr_slice_map(volume.shape[0], spec)
     return series
 
 
@@ -236,22 +243,25 @@ def _pad_or_crop(arr: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
     return out
 
 
-def default_acr_slice_map(n_slices: int) -> dict[int, int]:
-    """The ACR Large Phantom protocol acquires 11 axial slices. The ACR
-    test procedures reference *slice 1* (inferior, with the bars/wedges),
+def default_acr_slice_map(n_slices: int, spec: PhantomSpec | None = None) -> dict[int, int]:
+    """The standard ACR axial protocol acquires 11 slices. The ACR test
+    procedures reference *slice 1* (inferior, with the bars/wedges),
     *slice 5* (central), *slice 7* (uniform region), and *slice 11* (the
-    superior wedge-pair). When a series has exactly 11 slices the
-    default mapping is the natural one. For shorter series we fall back
+    superior wedge-pair). When a series matches the protocol slice count
+    we use the spec's standard mapping. For shorter series we fall back
     to evenly-spaced picks so the app remains usable on partial data."""
-    if n_slices >= 11:
-        return {1: 0, 5: 4, 7: 6, 11: 10}
+    if spec is None:
+        spec = default_phantom()
+    if n_slices >= spec.n_protocol_slices:
+        return dict(spec.slice_role_indices)
     if n_slices == 0:
         return {}
     # Best effort: spread across whatever we have
+    n_prot = spec.n_protocol_slices
     return {
         1: 0,
         5: min(n_slices - 1, n_slices // 2 - 1 if n_slices >= 2 else 0),
-        7: min(n_slices - 1, (n_slices * 6) // 11),
+        7: min(n_slices - 1, (n_slices * 6) // n_prot),
         11: n_slices - 1,
     }
 
@@ -276,23 +286,27 @@ def validate_series(series: DicomSeries) -> list[str]:
     """
     warnings: list[str] = []
     md = series.metadata
+    spec = series.spec
+    n_prot = spec.n_protocol_slices
 
     # Slice count
     if md.n_slices < 5:
         warnings.append(
-            f"Series has only {md.n_slices} slice(s). The ACR Large Phantom "
-            "protocol acquires 11 axial slices. Tests that need slice 11 will fail."
+            f"Series has only {md.n_slices} slice(s). The {spec.name} "
+            f"protocol acquires {n_prot} axial slices. Tests that need slice "
+            f"{n_prot} will fail."
         )
-    elif md.n_slices < 11:
+    elif md.n_slices < n_prot:
         warnings.append(
-            f"Series has {md.n_slices} slices but the ACR Large Phantom protocol "
-            "uses 11. Slice-role mapping has been guessed; verify on the Slice "
-            "Mapping tab."
+            f"Series has {md.n_slices} slices but the {spec.name} protocol "
+            f"uses {n_prot}. Slice-role mapping has been guessed; verify on the "
+            "Slice Mapping tab."
         )
-    elif md.n_slices > 11:
+    elif md.n_slices > n_prot:
         warnings.append(
-            f"Series has {md.n_slices} slices (expected 11). Auto-mapping picked "
-            "the first 11; if your protocol differs, override on the Slice Mapping tab."
+            f"Series has {md.n_slices} slices (expected {n_prot}). Auto-mapping "
+            f"picked the first {n_prot}; if your protocol differs, override on "
+            "the Slice Mapping tab."
         )
 
     # Pixel spacing
@@ -314,8 +328,8 @@ def validate_series(series: DicomSeries) -> list[str]:
         )
     elif md.slice_thickness_mm < 3 or md.slice_thickness_mm > 8:
         warnings.append(
-            f"SliceThickness {md.slice_thickness_mm:.1f} mm differs from the ACR "
-            "Large Phantom standard (5 mm)."
+            f"SliceThickness {md.slice_thickness_mm:.1f} mm differs from the "
+            f"{spec.name} standard ({spec.nominal_slice_thickness_mm:.0f} mm)."
         )
 
     # Sequence guess
@@ -325,7 +339,7 @@ def validate_series(series: DicomSeries) -> list[str]:
             f"('{md.series_description}'). Tests assume an ACR T1 or T2 axial series."
         )
 
-    # Image orientation: ACR Large Phantom protocol is axial.
+    # Image orientation: the ACR axial protocol is, well, axial.
     ds = series.datasets[0] if series.datasets else None
     if ds is not None and hasattr(ds, "ImageOrientationPatient"):
         try:
@@ -334,7 +348,7 @@ def validate_series(series: DicomSeries) -> list[str]:
             if not (abs(iop[0]) > 0.95 and abs(iop[4]) > 0.95):
                 warnings.append(
                     "ImageOrientationPatient suggests the series is not strictly "
-                    "axial. ACR Large Phantom procedures assume axial acquisition."
+                    f"axial. {spec.name} procedures assume axial acquisition."
                 )
         except Exception:
             pass

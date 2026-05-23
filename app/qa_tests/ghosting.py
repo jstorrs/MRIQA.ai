@@ -27,21 +27,23 @@ import numpy as np
 from ..io_dicom.dicom_loader import DicomSeries
 from ..utils.geometry import circular_roi_mask, elliptical_roi_mask
 from ..utils.phantom import localize_phantom, phantom_quality_warnings
+from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
-
-LARGE_ROI_AREA_CM2 = 200.0
-AIR_ROI_LONG_MM = 40.0      # 4 cm
-AIR_ROI_SHORT_MM = 10.0     # 1 cm
-AIR_OFFSET_MM = 12.0        # distance outside the phantom edge
-PSG_THRESHOLD_PERCENT = 3.0
 
 
 def _mm_to_px(mm: float, spacing_mm: float) -> float:
     return mm / spacing_mm
 
 
-def run(series: DicomSeries) -> TestResult:
+def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
+    if spec is None:
+        spec = series.spec
+    large_area = spec.ghosting_large_roi_area_cm2
+    air_long_mm = spec.ghosting_air_roi_long_mm
+    air_short_mm = spec.ghosting_air_roi_short_mm
+    air_offset_mm = spec.ghosting_air_offset_mm
+    psg_threshold = spec.ghosting_threshold_percent
     res = TestResult(
         test_id="ghosting",
         test_name="Percent Signal Ghosting (PSG)",
@@ -52,24 +54,24 @@ def run(series: DicomSeries) -> TestResult:
         img = series.slice(7).astype(np.float32)
         ps = series.metadata.pixel_spacing_mm  # (row, col)
         geom = localize_phantom(img)
-        for w in phantom_quality_warnings(geom, ps):
+        for w in phantom_quality_warnings(geom, ps, spec):
             res.add_warning(w, severity="medium")
 
         # Large ROI
-        large_area_mm2 = LARGE_ROI_AREA_CM2 * 100.0
+        large_area_mm2 = large_area * 100.0
         r_large = math.sqrt(large_area_mm2 / (ps[0] * ps[1]) / math.pi)
         r_large = min(r_large, geom.radius_px * 0.85)
         large_mask = circular_roi_mask(img.shape, geom.cy_px, geom.cx_px, r_large)
         s_large = float(img[large_mask].mean())
 
         # Air ROIs — semi-axes in px
-        long_px_row = _mm_to_px(AIR_ROI_LONG_MM / 2.0, ps[0])
-        long_px_col = _mm_to_px(AIR_ROI_LONG_MM / 2.0, ps[1])
-        short_px_row = _mm_to_px(AIR_ROI_SHORT_MM / 2.0, ps[0])
-        short_px_col = _mm_to_px(AIR_ROI_SHORT_MM / 2.0, ps[1])
+        long_px_row = _mm_to_px(air_long_mm / 2.0, ps[0])
+        long_px_col = _mm_to_px(air_long_mm / 2.0, ps[1])
+        short_px_row = _mm_to_px(air_short_mm / 2.0, ps[0])
+        short_px_col = _mm_to_px(air_short_mm / 2.0, ps[1])
 
-        offset_row = geom.radius_px + _mm_to_px(AIR_OFFSET_MM, ps[0])
-        offset_col = geom.radius_px + _mm_to_px(AIR_OFFSET_MM, ps[1])
+        offset_row = geom.radius_px + _mm_to_px(air_offset_mm, ps[0])
+        offset_col = geom.radius_px + _mm_to_px(air_offset_mm, ps[1])
 
         # Top (above): long axis horizontal -> wider in x (col), short in y (row)
         rois = {
@@ -95,8 +97,8 @@ def run(series: DicomSeries) -> TestResult:
             label="PSG",
             value=round(psg_pct, 3),
             unit="%",
-            spec=f"≤ {PSG_THRESHOLD_PERCENT:.1f} %",
-            passed=psg_pct <= PSG_THRESHOLD_PERCENT,
+            spec=f"≤ {psg_threshold:.1f} %",
+            passed=psg_pct <= psg_threshold,
         )
         res.measurements.append(m)
         res.passed = bool(m.passed)

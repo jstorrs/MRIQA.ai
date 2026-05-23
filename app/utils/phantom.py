@@ -20,6 +20,8 @@ from scipy import ndimage as ndi
 from skimage.filters import threshold_otsu
 from skimage.measure import label, regionprops
 
+from .phantom_spec import PhantomSpec
+
 
 @dataclass
 class PhantomGeometry:
@@ -72,8 +74,13 @@ def localize_phantom(image: np.ndarray, fill_holes: bool = True) -> PhantomGeome
     return PhantomGeometry(cx_px=cx, cy_px=cy, radius_px=radius_px, mask=mask)
 
 
-def phantom_quality_warnings(geom: PhantomGeometry, pixel_spacing_mm: tuple[float, float]) -> list[str]:
-    """Heuristic checks on whether the detected phantom looks like an ACR Large Phantom.
+def phantom_quality_warnings(
+    geom: PhantomGeometry,
+    pixel_spacing_mm: tuple[float, float],
+    spec: PhantomSpec,
+) -> list[str]:
+    """Heuristic checks on whether the detected phantom matches the selected
+    spec.
 
     Returns a list of human-readable warning strings; an empty list means
     the detection looks plausible. Used by every QA test to flag situations
@@ -82,14 +89,12 @@ def phantom_quality_warnings(geom: PhantomGeometry, pixel_spacing_mm: tuple[floa
     """
     out: list[str] = []
     rad_mm = geom.radius_px * 0.5 * (pixel_spacing_mm[0] + pixel_spacing_mm[1])
-    # ACR Large Phantom is 190 mm diameter (95 mm radius). On the slice-thickness
-    # slice the imaged outline is slightly smaller (~74 mm in the S-I direction
-    # because of the bar). On all other slices we expect radius near 95 mm.
-    if rad_mm < 70 or rad_mm > 115:
+    lo, hi = spec.radius_plausible_mm
+    if rad_mm < lo or rad_mm > hi:
         out.append(
             f"Detected phantom radius {rad_mm:.0f} mm is outside the expected range "
-            f"(70–115 mm) for the ACR Large Phantom. The segmentation may have included "
-            f"background or missed part of the phantom."
+            f"({lo:.0f}–{hi:.0f} mm) for the {spec.name}. The segmentation may have "
+            "included background or missed part of the phantom."
         )
     return out
 

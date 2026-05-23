@@ -24,6 +24,7 @@ import numpy as np
 
 from ..io_dicom.dicom_loader import DicomSeries
 from ..utils.phantom import localize_phantom
+from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
 
@@ -111,12 +112,21 @@ def _detect_resolution_bbox(image, geom):
     return (ay0, ay1, ax0, ax1)
 
 
-def run(series: DicomSeries, *, user_input: dict | None = None) -> TestResult:
+def run(
+    series: DicomSeries,
+    *,
+    spec: PhantomSpec | None = None,
+    user_input: dict | None = None,
+) -> TestResult:
     """`user_input` is a dict like {'UL': 1.0, 'LR': 0.9, 'spec': 1.0}.
 
     If `user_input` is None the test runs in "needs review" mode and
     returns the zoomed insert images for the technologist to inspect.
     """
+    if spec is None:
+        spec = series.spec
+    sizes_label = " | ".join(f"{s:.1f}" for s in spec.resolution_array_sizes_mm)
+    sizes_csv = " / ".join(f"{s:.1f}" for s in spec.resolution_array_sizes_mm)
     res = TestResult(
         test_id="high_contrast_resolution",
         test_name="High-Contrast Spatial Resolution",
@@ -131,10 +141,12 @@ def run(series: DicomSeries, *, user_input: dict | None = None) -> TestResult:
         full_crop, _ = crop_resolution_insert(img, geom, "full")
 
         def _draw_full(ax):
-            ax.set_title("Slice 1 — resolution insert: 1.1 | 1.0 | 0.9 mm (left→right)",
-                         fontsize=9)
+            ax.set_title(
+                f"Slice 1 — resolution insert: {sizes_label} mm (left→right)",
+                fontsize=9,
+            )
         res.annotated_images.append((
-            "Slice 1 — resolution insert (1.1 / 1.0 / 0.9 mm, left→right). "
+            f"Slice 1 — resolution insert ({sizes_csv} mm, left→right). "
             "UL blocks = vertical holes (upper), LR blocks = horizontal holes (lower).",
             render_annotated(full_crop, "", _draw_full, figsize=(8.0, 3.0))))
 
@@ -148,17 +160,17 @@ def run(series: DicomSeries, *, user_input: dict | None = None) -> TestResult:
                 render_annotated(crop, "", _draw, figsize=(8.0, 2.4))))
 
         if user_input:
-            spec = float(user_input.get("spec", 1.0))
+            threshold = float(user_input.get("spec", spec.resolution_pass_threshold_mm))
             ul = user_input.get("UL")
             lr = user_input.get("LR")
             def _mark(label, val):
                 if val is None:
                     res.measurements.append(Measurement(label, value=float("nan"), unit="mm"))
                     return None
-                passed = float(val) <= spec  # smaller resolvable spacing is better
+                passed = float(val) <= threshold  # smaller resolvable spacing is better
                 res.measurements.append(Measurement(
                     label=label, value=float(val), unit="mm",
-                    spec=f"≤ {spec:.1f} mm", passed=passed,
+                    spec=f"≤ {threshold:.1f} mm", passed=passed,
                 ))
                 return passed
             p_ul = _mark("UL smallest resolvable", ul)

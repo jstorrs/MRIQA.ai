@@ -20,12 +20,21 @@ import numpy as np
 
 from ..io_dicom.dicom_loader import DicomSeries
 from ..utils.phantom import localize_phantom
+from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
 
 
-def run(series: DicomSeries, *, user_input: dict | None = None) -> TestResult:
-    """`user_input` is a dict {8: spokes, 9: spokes, 10: spokes, 11: spokes}."""
+def run(
+    series: DicomSeries,
+    *,
+    spec: PhantomSpec | None = None,
+    user_input: dict | None = None,
+) -> TestResult:
+    """`user_input` is a dict {acr_slice_role: spokes_seen, ...}."""
+    if spec is None:
+        spec = series.spec
+    lcd_slices = spec.lcd_slices
     res = TestResult(
         test_id="low_contrast_detectability",
         test_name="Low-Contrast Object Detectability",
@@ -33,7 +42,7 @@ def run(series: DicomSeries, *, user_input: dict | None = None) -> TestResult:
         passed=None,
     )
     try:
-        for acr in (8, 9, 10, 11):
+        for acr in lcd_slices:
             if acr not in series.acr_slice_map:
                 continue
             img = series.slice(acr).astype(np.float32)
@@ -68,7 +77,7 @@ def run(series: DicomSeries, *, user_input: dict | None = None) -> TestResult:
 
         if user_input:
             total = 0
-            for acr in (8, 9, 10, 11):
+            for acr in lcd_slices:
                 v = int(user_input.get(acr, 0) or 0)
                 total += v
                 res.measurements.append(Measurement(
@@ -77,9 +86,10 @@ def run(series: DicomSeries, *, user_input: dict | None = None) -> TestResult:
                     unit="spokes",
                 ))
             is_3t = series.metadata.field_strength_t >= 3.0 - 0.05
-            threshold = 9 if is_3t else 7
+            threshold = spec.lcd_threshold_3t if is_3t else spec.lcd_threshold_lowfield
+            slice_range = f"{lcd_slices[0]}–{lcd_slices[-1]}"
             res.measurements.append(Measurement(
-                label="Total spokes (slices 8–11)",
+                label=f"Total spokes (slices {slice_range})",
                 value=float(total),
                 unit="spokes",
                 spec=f"≥ {threshold}",

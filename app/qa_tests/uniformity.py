@@ -31,13 +31,9 @@ from scipy.ndimage import uniform_filter
 from ..io_dicom.dicom_loader import DicomSeries
 from ..utils.geometry import circular_roi_mask
 from ..utils.phantom import localize_phantom, phantom_quality_warnings
+from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
-
-LARGE_ROI_AREA_CM2 = 200.0      # ~200 cm²
-SMALL_ROI_AREA_CM2 = 1.0        # ~1 cm²
-PIU_THRESHOLD_LT_3T = 82.0
-PIU_THRESHOLD_GE_3T = 87.5
 
 
 def _radius_for_area_px(area_cm2: float, pixel_spacing_mm) -> float:
@@ -47,7 +43,13 @@ def _radius_for_area_px(area_cm2: float, pixel_spacing_mm) -> float:
     return radius_px
 
 
-def run(series: DicomSeries) -> TestResult:
+def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
+    if spec is None:
+        spec = series.spec
+    large_area = spec.piu_large_roi_area_cm2
+    small_area = spec.piu_small_roi_area_cm2
+    threshold_3t = spec.piu_threshold_3t_percent
+    threshold_lo = spec.piu_threshold_lowfield_percent
     res = TestResult(
         test_id="uniformity",
         test_name="Image Intensity Uniformity (PIU)",
@@ -58,13 +60,13 @@ def run(series: DicomSeries) -> TestResult:
         img = series.slice(7).astype(np.float32)
         ps = series.metadata.pixel_spacing_mm
         geom = localize_phantom(img)
-        for w in phantom_quality_warnings(geom, ps):
+        for w in phantom_quality_warnings(geom, ps, spec):
             res.add_warning(w, severity="medium")
 
-        r_large = _radius_for_area_px(LARGE_ROI_AREA_CM2, ps)
+        r_large = _radius_for_area_px(large_area, ps)
         # Don't let the large ROI exceed the phantom interior
         r_large = min(r_large, geom.radius_px * 0.85)
-        r_small = _radius_for_area_px(SMALL_ROI_AREA_CM2, ps)
+        r_small = _radius_for_area_px(small_area, ps)
 
         large_mask = circular_roi_mask(img.shape, geom.cy_px, geom.cx_px, r_large)
         # Mean of the small ROI at every center pixel: a uniform circular filter.
@@ -112,7 +114,7 @@ def run(series: DicomSeries) -> TestResult:
         piu = 100.0 * (1.0 - (s_high - s_low) / (s_high + s_low + 1e-9))
 
         is_3t = series.metadata.field_strength_t >= 3.0 - 0.05
-        threshold = PIU_THRESHOLD_GE_3T if is_3t else PIU_THRESHOLD_LT_3T
+        threshold = threshold_3t if is_3t else threshold_lo
 
         m = Measurement(
             label="PIU",
@@ -124,8 +126,8 @@ def run(series: DicomSeries) -> TestResult:
         res.measurements.append(m)
         res.passed = bool(m.passed)
         res.notes = (
-            f"Large ROI area ≈ {LARGE_ROI_AREA_CM2:.0f} cm² (radius={r_large*((ps[0]+ps[1])/2):.1f} mm). "
-            f"Small ROI ≈ {SMALL_ROI_AREA_CM2:.0f} cm². High mean = {s_high:.1f}, Low mean = {s_low:.1f}."
+            f"Large ROI area ≈ {large_area:.0f} cm² (radius={r_large*((ps[0]+ps[1])/2):.1f} mm). "
+            f"Small ROI ≈ {small_area:.0f} cm². High mean = {s_high:.1f}, Low mean = {s_low:.1f}."
         )
 
         # --- Detection-quality heuristics ---

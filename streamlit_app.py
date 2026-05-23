@@ -33,6 +33,7 @@ from app.qa_tests import high_contrast_resolution, low_contrast_detectability  #
 from app.qa_tests.base import TestResult             # noqa: E402
 from app.reporting.csv_report import write_csv       # noqa: E402
 from app.reporting.pdf_report import write_pdf       # noqa: E402
+from app.utils.phantom_spec import PHANTOMS, LARGE   # noqa: E402
 
 EXPORTS_DIR = _ROOT / "exports"
 EXPORTS_DIR.mkdir(exist_ok=True)
@@ -228,7 +229,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("MRIQA.ai — ACR Large Phantom QA")
+st.title("MRIQA.ai — ACR Phantom QA")
 
 # ---- Password gate (shared password via Streamlit secrets) ---------------- #
 if not check_password():
@@ -237,7 +238,7 @@ if not check_password():
 st.caption(
     "Decision-support tool for medical physicists. "
     "**Not a medical device. Not for diagnostic use.** "
-    "Designed for the ACR Large MRI Phantom (2015 QC Manual procedures)."
+    "Implements the ACR MRI Quality Control Manual (2015) procedures."
 )
 
 # --------------------------------------------------------------------------- #
@@ -253,12 +254,24 @@ with st.sidebar:
     )
     st.markdown(
         "<div class='mri-small'>"
-        "Expected input: a single T1 or T2 series of the ACR Large Phantom — "
+        "Expected input: a single T1 or T2 ACR phantom series — "
         "11 axial slices, 250&nbsp;mm FOV, 5&nbsp;mm thickness."
         "</div>",
         unsafe_allow_html=True,
     )
     st.divider()
+
+    st.markdown("**Phantom**")
+    _phantom_options = [(s.short_name, s.name) for s in PHANTOMS.values()]
+    phantom_choice = st.selectbox(
+        "ACR phantom model",
+        options=[opt[0] for opt in _phantom_options],
+        format_func=lambda k: dict(_phantom_options)[k],
+        index=[i for i, (k, _) in enumerate(_phantom_options) if k == LARGE.short_name][0],
+        help="Selects the geometric and pass/fail thresholds. Large = 190 mm Ø / "
+             "148 mm S-I; Medium = 165 mm Ø / 134 mm S-I.",
+    )
+
     uploaded = st.file_uploader(
         "Drop a .zip of the series, or select .dcm files",
         type=None,
@@ -267,10 +280,11 @@ with st.sidebar:
     )
 
     st.markdown("**Optional: sagittal localizer**")
+    _selected_spec = PHANTOMS.get(phantom_choice, LARGE)
     st.caption(
         "Upload the sagittal scout to enable the geometric-accuracy "
-        "superior-inferior length (148 mm) check, which cannot be measured "
-        "on an axial slice."
+        f"superior-inferior length ({_selected_spec.si_length_mm:.0f} mm) check, "
+        "which cannot be measured on an axial slice."
     )
     uploaded_loc = st.file_uploader(
         "Localizer (.zip or .dcm)",
@@ -286,8 +300,7 @@ with st.sidebar:
         ["Auto (from DICOM)", "1.5 T", "3.0 T"],
         index=0,
         help="If the DICOM is missing the MagneticFieldStrength tag (shows B0 = 0.0 T), "
-             "set it here so the correct ACR thresholds apply (PIU ≥ 87.5% at 3 T vs "
-             "≥ 82% at 1.5 T).",
+             "set it here so the correct ACR thresholds apply.",
     )
 
     with st.expander("Advanced — load from a local folder"):
@@ -367,6 +380,14 @@ if uploaded_loc:
 # Attach the localizer to the active series so geometric accuracy can use it
 if series is not None:
     series.localizer = st.session_state.get("localizer")
+    # Apply the selected phantom spec. Loader attaches LARGE by default; this
+    # lets the user pick Medium without having to re-upload. Note: Large and
+    # Medium share the same 11-slice ACR mapping, so series.acr_slice_map does
+    # not need to be recomputed. If a future spec introduces a different
+    # protocol, recompute via default_acr_slice_map(n_slices, new_spec) here —
+    # but only when the user has not customized the mapping in the Slice
+    # Mapping tab.
+    series.spec = PHANTOMS.get(phantom_choice, LARGE)
     # Apply a manual field-strength override (used for PIU / low-contrast limits)
     # when the DICOM tag is missing or the user wants to force a value.
     if field_choice == "1.5 T":
@@ -546,7 +567,7 @@ with tab_run:
             try:
                 if is_user_test and tid in results and results[tid].measurements:
                     continue
-                res = mod.run(series)
+                res = mod.run(series, spec=series.spec)
             except Exception as e:
                 res = TestResult(test_id=tid, test_name=label, automated=not is_user_test,
                                  passed=None, error=str(e))
@@ -566,30 +587,43 @@ with tab_run:
     st.markdown("### Visual scoring — high-contrast resolution")
     st.caption("On slice 1, look at the UL and LR hole arrays in the zoomed crops "
                "(shown in Results once the QA has been run).")
+    res_sizes = list(series.spec.resolution_array_sizes_mm)
+    res_default_idx = (
+        res_sizes.index(series.spec.resolution_pass_threshold_mm)
+        if series.spec.resolution_pass_threshold_mm in res_sizes
+        else len(res_sizes) // 2
+    )
     cspec, cul, clr = st.columns(3)
-    spec = cspec.selectbox("Required smallest row (mm)", [1.1, 1.0, 0.9], index=1)
+    threshold = cspec.selectbox("Required smallest row (mm)", res_sizes, index=res_default_idx)
     ul = cul.selectbox("UL smallest resolvable",
-                       [None, 1.1, 1.0, 0.9],
+                       [None, *res_sizes],
                        format_func=lambda x: "—" if x is None else f"{x} mm")
     lr = clr.selectbox("LR smallest resolvable",
-                       [None, 1.1, 1.0, 0.9],
+                       [None, *res_sizes],
                        format_func=lambda x: "—" if x is None else f"{x} mm")
     if st.button("Save resolution scoring"):
-        res = high_contrast_resolution.run(series, user_input={"UL": ul, "LR": lr, "spec": spec})
+        res = high_contrast_resolution.run(
+            series, spec=series.spec,
+            user_input={"UL": ul, "LR": lr, "spec": threshold},
+        )
         st.session_state.results["high_contrast_resolution"] = res
         st.success("Saved.")
 
+    lcd_slices = series.spec.lcd_slices
+    lcd_range_label = f"{lcd_slices[0]}–{lcd_slices[-1]}"
     st.markdown("### Visual scoring — low-contrast object detectability")
-    st.caption("Count complete spokes visible on each of slices 8–11.")
-    cs = st.columns(4)
-    spoke_counts = {}
-    for col, s in zip(cs, [8, 9, 10, 11]):
+    st.caption(f"Count complete spokes visible on each of slices {lcd_range_label}.")
+    cs = st.columns(len(lcd_slices))
+    spoke_counts: dict[int, int] = {}
+    for col, s in zip(cs, lcd_slices):
         with col:
             spoke_counts[s] = st.number_input(
                 f"Slice {s} spokes", min_value=0, max_value=10, value=0, step=1
             )
     if st.button("Save LCD scoring"):
-        res = low_contrast_detectability.run(series, user_input=spoke_counts)
+        res = low_contrast_detectability.run(
+            series, spec=series.spec, user_input=spoke_counts,
+        )
         st.session_state.results["low_contrast_detectability"] = res
         st.success("Saved.")
 

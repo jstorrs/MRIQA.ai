@@ -36,11 +36,9 @@ import numpy as np
 
 from ..io_dicom.dicom_loader import DicomSeries
 from ..utils.phantom import localize_phantom
+from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
-
-NOMINAL_THICKNESS_MM = 5.0
-THICKNESS_TOLERANCE_MM = 0.7
 
 
 def _smooth(p: np.ndarray, n: int = 3) -> np.ndarray:
@@ -79,7 +77,11 @@ def _fwhm_with_pos(profile: np.ndarray, x0: int):
     return rf - lf, x0 + lf, x0 + rf
 
 
-def run(series: DicomSeries) -> TestResult:
+def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
+    if spec is None:
+        spec = series.spec
+    nominal = spec.nominal_slice_thickness_mm
+    tol = spec.slice_thickness_tolerance_mm
     res = TestResult(
         test_id="slice_thickness",
         test_name="Slice Thickness Accuracy",
@@ -136,8 +138,8 @@ def run(series: DicomSeries) -> TestResult:
             label="Measured slice thickness",
             value=round(thickness_mm, 2),
             unit="mm",
-            spec=f"{NOMINAL_THICKNESS_MM} ± {THICKNESS_TOLERANCE_MM} mm",
-            passed=abs(thickness_mm - NOMINAL_THICKNESS_MM) <= THICKNESS_TOLERANCE_MM,
+            spec=f"{nominal} ± {tol} mm",
+            passed=abs(thickness_mm - nominal) <= tol,
         )
         res.measurements.append(m)
         res.measurements.append(Measurement("Top ramp FWHM", round(top_mm, 2), "mm"))
