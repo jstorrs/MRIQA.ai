@@ -70,6 +70,9 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         short_px_row = _mm_to_px(air_short_mm / 2.0, ps[0])
         short_px_col = _mm_to_px(air_short_mm / 2.0, ps[1])
 
+        # geom.radius_px is a single scalar; for non-square pixels it conflates
+        # the row- and column-axis radii. Acceptable for ACR phantom datasets
+        # (PixelSpacing is square) but worth knowing if non-square data shows up.
         offset_row = geom.radius_px + _mm_to_px(air_offset_mm, ps[0])
         offset_col = geom.radius_px + _mm_to_px(air_offset_mm, ps[1])
 

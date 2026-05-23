@@ -111,6 +111,11 @@ def run(
                 ww = max(1.0, (hi - lo) * 1.1)
             else:
                 wl = ww = None
+                res.add_warning(
+                    f"Slice {acr}: LCD chamber crop has no positive signal — "
+                    "the chamber may have been mis-localized. Check the overlay.",
+                    severity="medium",
+                )
 
             def _draw(ax, acr=acr):
                 ax.set_title(f"Slice {acr} — low-contrast spokes (count complete spokes)",

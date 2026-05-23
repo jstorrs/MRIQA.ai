@@ -81,9 +81,9 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         # Mean of the small ROI at every center pixel: a uniform circular filter.
         # We approximate the circular small-ROI mean with a square box of equal area.
         # This is the standard interpretation used by many ACR analysers.
-        box_size = int(round(2 * r_small))
-        if box_size < 3:
-            box_size = 3
+        # Ceil rather than round so the box doesn't shrink below the requested
+        # small-ROI area when 2*r_small has a fractional part.
+        box_size = max(3, int(math.ceil(2 * r_small)))
         small_mean = uniform_filter(img, size=box_size)
 
         # --- Exclude air / voids (e.g. the phantom's top air bubble or any
