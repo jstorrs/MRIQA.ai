@@ -18,7 +18,6 @@ from pathlib import Path
 import numpy as np
 import pydicom
 import streamlit as st
-from streamlit.components.v1 import html as _components_html
 
 # ---- make the `app/` package importable --------------------------------- #
 _THIS = Path(__file__).resolve()
@@ -244,7 +243,7 @@ def _switch_tab(label: str) -> None:
     walks the parent document for buttons carrying the ARIA `role="tab"`
     contract used by st.tabs and clicks the first match. Fragile against
     Streamlit DOM changes but the ARIA role is the stable target."""
-    _components_html(
+    st.iframe(
         f"""
         <script>
         (function() {{
@@ -260,7 +259,10 @@ def _switch_tab(label: str) -> None:
         }})();
         </script>
         """,
-        height=0,
+        # st.iframe's height validator rejects 0 — the smallest legal value is
+        # 1px, which leaves a sliver that's essentially invisible. The iframe
+        # body is just a <script> tag with no rendered content.
+        height=1,
     )
 
 
@@ -423,7 +425,7 @@ with st.sidebar:
                  "this list.",
         )
 
-        if st.button("Clear all series", use_container_width=True):
+        if st.button("Clear all series", width="stretch"):
             for k in ("series", "results", "series_warnings",
                       "view_wl", "view_ww",
                       "series_catalog", "selected_series_uid", "loaded_series_uid"):
@@ -641,7 +643,7 @@ with tab_viewer:
     cww.number_input("Window width", key="view_ww", min_value=1.0, step=10.0)
     with cbtn:
         st.markdown("<div style='height:1.7em'></div>", unsafe_allow_html=True)
-        st.button("Auto", on_click=_reset_window, use_container_width=True,
+        st.button("Auto", on_click=_reset_window, width="stretch",
                   help="Reset window to the auto level/width for this series.")
     st.caption("Window level/width applies to all slices as you scroll.")
 
@@ -807,7 +809,7 @@ def _render_results_view(test_order, analysis_mode, series, *, key_prefix: str):
             ),
             "Error": r.error or "",
         })
-    st.dataframe(rows, hide_index=True, use_container_width=True)
+    st.dataframe(rows, hide_index=True, width="stretch")
 
     st.markdown("### Per-test details")
     for tid, label, _ in test_order:
@@ -833,13 +835,13 @@ def _render_results_view(test_order, analysis_mode, series, *, key_prefix: str):
                       "Spec": m.spec,
                       "Pass": "" if m.passed is None else ("✓" if m.passed else "✗")}
                      for m in r.measurements],
-                    hide_index=True, use_container_width=True,
+                    hide_index=True, width="stretch",
                 )
             if r.annotated_images:
                 img_cols = st.columns(min(2, len(r.annotated_images)))
                 for i, (cap, im) in enumerate(r.annotated_images):
                     with img_cols[i % len(img_cols)]:
-                        st.image(im, caption=cap, use_container_width=True)
+                        st.image(im, caption=cap, width="stretch")
 
     st.divider()
     if st.button("Save this run to History", key=f"{key_prefix}_save_history"):
@@ -1288,7 +1290,7 @@ with tab_validation:
             }
             for e in st.session_state.validation_log
         ]
-        st.dataframe(compact, hide_index=True, use_container_width=True)
+        st.dataframe(compact, hide_index=True, width="stretch")
 
         # Build CSV (union of all keys across entries)
         import csv as _csv
