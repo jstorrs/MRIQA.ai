@@ -20,18 +20,16 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from app.io_dicom.dicom_loader import (              # noqa: E402
-    DicomSeries, load_series, default_acr_slice_map,
-    validate_series,
+    DicomSeries, load_series, validate_series,
 )
 from app.qa_tests import (                              # noqa: E402
     AXIAL_TEST_ORDER, SAGITTAL_TEST_ORDER, AnalysisMode,
 )
-from app.qa_tests.base import TestResult  # noqa: E402
 from app.ui import (                                  # noqa: E402
-    analysis_inputs, auth, badges, export, history, manual_scoring,
-    results_view, uploads, validation, viewer,
+    auth, export, history, landing, manual_scoring,
+    results_view, sagittal_analysis, slice_mapping,
+    uploads, validation, viewer,
 )
-from app.ui.badges import normalize_img                # noqa: E402
 from app.ui.banner import banner                       # noqa: E402
 
 EXPORTS_DIR = _ROOT / "exports"
@@ -139,60 +137,14 @@ elif st.session_state.series_catalog and st.session_state.get("selected_series_u
         series = st.session_state.series
 
 # Phantom-spec and field-strength selection happen on the Analysis tab so the
-# inputs to the automated algorithms sit together. See `_render_analysis_inputs`.
+# inputs to the automated algorithms sit together.
 
 # --------------------------------------------------------------------------- #
 # Landing page when no series is loaded                                       #
 # --------------------------------------------------------------------------- #
 
 if series is None:
-    st.markdown("## How it works")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown("### 1. Upload")
-        st.markdown(
-            "Drop a zipped ACR phantom series (or individual `.dcm` files) "
-            "into the sidebar. Both T1/T2 axial series and sagittal scouts work."
-        )
-    with c2:
-        st.markdown("### 2. Pick a series")
-        st.markdown(
-            "The app picks the analysis from the series you choose:"
-            " **11-slice axial** runs the full ACR protocol; a"
-            " **single sagittal image** runs the S-I length check."
-        )
-    with c3:
-        st.markdown("### 3. Run + Report")
-        st.markdown(
-            "Axial runs five automated tests (Analysis tab) and, on a "
-            "separate **Manual scoring** tab, two visual tests. Sagittal runs "
-            "one automated test. Export a PDF + CSV when done."
-        )
-
-    st.divider()
-    st.markdown("### Important — read before uploading")
-    st.warning(
-        "**Phantom data only.** This MVP is intended for ACR phantom QA. "
-        "Do NOT upload patient (PHI) DICOMs to a publicly-hosted instance. "
-        "Even though uploads are not persisted, de-identify your data first."
-    )
-    st.info(
-        "**Not a medical device.** Numerical results are decision-support for "
-        "physicists. Final QA approval and clinical use of any scanner "
-        "remain the responsibility of the supervising physicist."
-    )
-
-    if st.session_state.history:
-        st.divider()
-        st.markdown("### Sessions completed this browser tab")
-        for s in reversed(st.session_state.history):
-            st.markdown(
-                f"- **{s['datetime']}** · {s['scanner']} · "
-                f"{s['sequence']} · {badges.status_badge(s['verdict'])} "
-                f"(pass {s['counts']['PASS']} · fail {s['counts']['FAIL']} · "
-                f"review {s['counts']['REVIEW']})",
-                unsafe_allow_html=True,
-            )
+    landing.render()
     st.stop()
 
 md = series.metadata
@@ -254,162 +206,46 @@ if st.session_state.series_warnings and analysis_mode == "axial":
 # --------------------------------------------------------------------------- #
 
 if analysis_mode == "axial":
-    tab_slices, tab_manual, tab_viewer, tab_results, tab_validation, tab_history, tab_export = st.tabs(
+    (tab_analysis, tab_manual, tab_viewer, tab_results,
+     tab_validation, tab_history, tab_export) = st.tabs(
         ["Analysis", "Manual scoring", "Viewer", "Results",
          "Validation", "History", "Export"]
     )
-else:
-    tab_results, tab_viewer, tab_validation, tab_history, tab_export = st.tabs(
-        ["Analysis", "Viewer", "Validation", "History", "Export"]
-    )
-    tab_slices = None
-    tab_manual = None
-
-# ----- Viewer ----------------------------------------------------------- #
-with tab_viewer:
-    viewer.render(series)
-
-
-
-# ----- Analysis (axial: slice mapping + automated run) ----------------- #
-if tab_slices is not None:
-    with tab_slices:
-        st.subheader("Analysis inputs")
-        st.caption(
-            "Everything above the **Run all automated tests** button is an "
-            "input to the algorithms. The dropdowns are pre-selected from the "
-            "loaded series — change them only if the defaults are wrong."
-        )
-        analysis_inputs.render(series, key_prefix="axial_inputs")
-
-        st.divider()
-        st.subheader("ACR slice role mapping")
-        st.write(
-            "ACR procedures reference **slice 1** (bars/wedges), **5** (central), "
-            "**7** (uniform region), and **11** (superior wedges). Auto-mapping uses "
-            "InstanceNumber. Override below if your series is non-standard."
-        )
-        default = default_acr_slice_map(md.n_slices)
-        cols = st.columns(4)
-        new_map = {}
-        for col, role in zip(cols, [1, 5, 7, 11]):
-            with col:
-                cur = series.acr_slice_map.get(role, default.get(role, 0))
-                v = st.number_input(
-                    f"ACR slice {role} → physical index",
-                    min_value=1, max_value=max(1, md.n_slices),
-                    value=min(int(cur) + 1, md.n_slices), step=1,
-                )
-                new_map[role] = int(v) - 1
-                preview = normalize_img(series.pixel_array[int(v) - 1])
-                st.image(preview, caption=f"Physical slice {int(v)}", width=180)
-
-        if len(set(new_map.values())) < 4:
-            st.warning("Two or more ACR roles are mapped to the same physical slice. "
-                       "This is unusual — confirm before running QA.")
-
-        series.acr_slice_map = {**series.acr_slice_map, **new_map}
-        st.session_state.series = series
-
-        st.divider()
-        st.markdown("### Run automated tests")
-        st.caption(
-            "Runs the five automated ACR tests against the slice mapping above. "
-            "The two visual tests (HCR, LCD) are scored separately on the "
-            "**Manual scoring** tab — typically only worth doing once the "
-            "automated tests pass."
-        )
-        if st.button("Run all automated tests", type="primary"):
-            results: dict[str, TestResult] = dict(st.session_state.results)
-            results.update(results_view.run_automated_tests(series, test_order))
-            st.session_state.results = results
-            st.rerun()
-
-        # Show the results inline after a run, mirroring how the sagittal mode
-        # surfaces them on the same tab that hosts the Run button.
-        if st.session_state.results:
-            st.divider()
-            results_view.render(test_order, analysis_mode, series,
-                                 key_prefix="slice_run_tab",
-                                 scope="automated")
-
-# ----- Results / sagittal Analysis -------------------------------------- #
-with tab_results:
-    if analysis_mode == "axial":
-        st.subheader("Results")
-
-    # Sagittal mode has no separate slice-mapping step — the run trigger plus
-    # the algorithm inputs live here on the Analysis tab.
-    if analysis_mode == "sagittal":
-        st.subheader("Analysis inputs")
-        st.caption(
-            "Everything above the **Run S-I length test** button is an input "
-            "to the algorithm. The dropdowns are pre-selected from the loaded "
-            "series — change them only if the defaults are wrong."
-        )
-        analysis_inputs.render(series, key_prefix="sagittal_inputs",
-                                show_sequence=False)
-
-        st.divider()
-        st.subheader("Sagittal image")
-        st.caption(
-            "The S-I length is measured on a single sagittal scout. The "
-            "selector mirrors the axial slice-mapping picker for consistency; "
-            "with a 1-image upload it is trivially 1 of 1."
-        )
-        _sag_cols = st.columns(4)
-        with _sag_cols[0]:
-            sag_idx = st.number_input(
-                "Sagittal image → physical index",
-                min_value=1, max_value=max(1, md.n_slices),
-                value=1, step=1, key="sagittal_image_index",
-            )
-            _sag_preview = normalize_img(series.pixel_array[int(sag_idx) - 1])
-            st.image(_sag_preview, caption=f"Physical slice {int(sag_idx)}", width=180)
-
-        st.divider()
-        st.subheader("Run")
-        st.caption(
-            f"Measures the phantom's superior-inferior length on the sagittal "
-            f"scout against the spec nominal "
-            f"({series.spec.si_length_mm:.0f} mm ± {series.spec.length_tolerance_mm:.0f} mm)."
-        )
-        if st.button("Run S-I length test", type="primary"):
-            results: dict[str, TestResult] = dict(st.session_state.results)
-            for t in test_order:
-                try:
-                    res = t.runner.run(series, spec=series.spec)
-                except Exception as e:
-                    res = TestResult(test_id=t.id, test_name=t.label, automated=True,
-                                     passed=None, error=str(e))
-                results[t.id] = res
-            st.session_state.results = results
-            st.rerun()
-
-    if not st.session_state.results:
-        if analysis_mode == "axial":
-            st.info("Confirm slice roles and run automated tests on the "
-                    "**Analysis** tab first.")
-        else:
-            st.info("Press **Run S-I length test** above.")
-    else:
-        results_view.render(test_order, analysis_mode, series,
-                             key_prefix="results_tab")
-
-# ----- Manual scoring (axial only) ------------------------------------- #
-if tab_manual is not None:
+    with tab_analysis:
+        slice_mapping.render(series, test_order, analysis_mode)
     with tab_manual:
         manual_scoring.render(series, test_order, analysis_mode)
+    with tab_results:
+        st.subheader("Results")
+        if not st.session_state.results:
+            st.info(
+                "Confirm slice roles and run automated tests on the "
+                "**Analysis** tab first."
+            )
+        else:
+            results_view.render(
+                test_order, analysis_mode, series, key_prefix="results_tab",
+            )
+else:
+    (tab_analysis, tab_viewer, tab_validation,
+     tab_history, tab_export) = st.tabs(
+        ["Analysis", "Viewer", "Validation", "History", "Export"]
+    )
+    with tab_analysis:
+        sagittal_analysis.render(series, test_order)
+        if not st.session_state.results:
+            st.info("Press **Run S-I length test** above.")
+        else:
+            results_view.render(
+                test_order, analysis_mode, series, key_prefix="results_tab",
+            )
 
-# ----- History (in-browser-session) ------------------------------------- #
+# Tabs shared between modes — both branches above bind these names.
+with tab_viewer:
+    viewer.render(series)
 with tab_history:
     history.render()
-
-# ----- Validation (testing mode) --------------------------------------- #
 with tab_validation:
     validation.render(series, test_order, analysis_mode)
-
-
-# ----- Export ----------------------------------------------------------- #
 with tab_export:
     export.render(series, test_order, EXPORTS_DIR, APP_VERSION)
