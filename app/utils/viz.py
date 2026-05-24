@@ -24,7 +24,9 @@ def normalize(image: np.ndarray, wl: float | None = None, ww: float | None = Non
     """
     img = image.astype(np.float32)
     if img.size == 0 or not np.isfinite(img).any():
-        return np.zeros_like(img) if img.size else np.zeros((1, 1), dtype=np.float32)
+        # Always return a renderable 1x1 array; a zero-size zeros_like would
+        # crash imshow downstream.
+        return np.zeros((1, 1), dtype=np.float32)
     if wl is not None and ww is not None and ww > 0:
         lo, hi = wl - ww / 2.0, wl + ww / 2.0
         return np.clip((img - lo) / (hi - lo + 1e-9), 0.0, 1.0)
