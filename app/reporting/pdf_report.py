@@ -32,27 +32,17 @@ from reportlab.platypus import (
 
 from ..io_dicom.dicom_loader import DicomSeries
 from ..qa_tests.base import TestResult, verdict_of
+from ..utils import theme
 
 
-_STATUS_COLOR = {
-    "PASS":   colors.HexColor("#1e8e3e"),
-    "FAIL":   colors.HexColor("#d93025"),
-    "REVIEW": colors.HexColor("#b06000"),
-    "ERROR":  colors.HexColor("#666666"),
-    "—":      colors.HexColor("#9aa0a6"),
-}
-_STATUS_BG = {
-    "PASS":   colors.HexColor("#ecf7ee"),
-    "FAIL":   colors.HexColor("#fdecea"),
-    "REVIEW": colors.HexColor("#fff5e1"),
-    "ERROR":  colors.HexColor("#f1f1f1"),
-    "—":      colors.HexColor("#f7f9fc"),
-}
+_STATUS_COLOR = {k: colors.HexColor(v) for k, v in theme.STATUS_COLORS.items()}
+_STATUS_BG = {k: colors.HexColor(v) for k, v in theme.STATUS_BG.items()}
+_CONF_COLOR = {k: colors.HexColor(v) for k, v in theme.CONFIDENCE_COLORS.items()}
 
-BRAND = colors.HexColor("#0B7CC4")
-INK = colors.HexColor("#1A2330")
-GREY = colors.HexColor("#5A6473")
-LIGHT_GREY = colors.HexColor("#E3E6EB")
+BRAND = colors.HexColor(theme.BRAND)
+INK = colors.HexColor(theme.INK)
+GREY = colors.HexColor(theme.GREY)
+LIGHT_GREY = colors.HexColor(theme.LIGHT_GREY)
 
 
 # --------------------------------------------------------------------------- #
@@ -230,13 +220,11 @@ def _summary_table(results: list[TestResult]) -> Table:
         ("TOPPADDING", (0, 0), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ]
-    conf_color = {"HIGH": _STATUS_COLOR["PASS"], "MEDIUM": _STATUS_COLOR["REVIEW"], "LOW": _STATUS_COLOR["FAIL"]}
     for i, r in enumerate(results, 1):
         c = _STATUS_COLOR.get(r.status_text(), colors.black)
         style.append(("TEXTCOLOR", (2, i), (2, i), c))
         style.append(("FONT", (2, i), (2, i), "Helvetica-Bold", 9))
-        conf_label = r.confidence_label()
-        cc = conf_color.get(conf_label, INK)
+        cc = _CONF_COLOR.get(r.confidence_label(), INK)
         style.append(("TEXTCOLOR", (3, i), (3, i), cc))
         style.append(("FONT", (3, i), (3, i), "Helvetica-Bold", 9))
     tbl.setStyle(TableStyle(style))

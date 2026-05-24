@@ -36,6 +36,8 @@ from app.reporting.csv_report import write_csv       # noqa: E402
 from app.reporting.pdf_report import write_pdf       # noqa: E402
 from app.utils.phantom import detect_phantom_spec    # noqa: E402
 from app.utils.phantom_spec import PHANTOMS, LARGE   # noqa: E402
+from app.utils import theme                           # noqa: E402
+from app.utils import viz                             # noqa: E402
 
 EXPORTS_DIR = _ROOT / "exports"
 EXPORTS_DIR.mkdir(exist_ok=True)
@@ -95,18 +97,10 @@ def check_password() -> bool:
 
 
 def _normalize_img(img: np.ndarray, wl: float | None = None, ww: float | None = None) -> np.ndarray:
-    img = img.astype(np.float32)
-    if img.size == 0 or not np.isfinite(img).any():
-        return np.zeros((1, 1), dtype=np.uint8)
-    if wl is None or ww is None or ww <= 0:
-        p2, p98 = np.percentile(img, (2, 98))
-        if p98 - p2 < 1e-6:
-            p2, p98 = float(img.min()), float(img.max() + 1)
-        out = np.clip((img - p2) / (p98 - p2), 0, 1)
-    else:
-        lo, hi = wl - ww / 2, wl + ww / 2
-        out = np.clip((img - lo) / (hi - lo + 1e-6), 0, 1)
-    return (out * 255).astype(np.uint8)
+    """uint8 view of an MR image for ``st.image``. Delegates the actual
+    windowing to ``viz.normalize`` so the Streamlit display and the PDF
+    overlays agree pixel-for-pixel."""
+    return (viz.normalize(img, wl=wl, ww=ww) * 255).astype(np.uint8)
 
 
 def _catalog_uploads(uploaded_files) -> list[dict]:
@@ -171,13 +165,7 @@ def _series_label(entry: dict) -> str:
 
 def _status_badge(status: str) -> str:
     """Return a markdown-friendly colored badge for a test status."""
-    color = {
-        "PASS": "#1e8e3e",
-        "FAIL": "#d93025",
-        "REVIEW": "#b06000",
-        "ERROR": "#666666",
-        "—": "#cccccc",
-    }.get(status, "#cccccc")
+    color = theme.STATUS_COLORS.get(status, "#cccccc")
     return (
         f"<span style='background:{color};color:white;padding:2px 8px;"
         f"border-radius:10px;font-size:0.78em;font-weight:600;letter-spacing:0.5px;'>"
@@ -185,13 +173,13 @@ def _status_badge(status: str) -> str:
     )
 
 
+_CONFIDENCE_LABELS = {"high": "HIGH", "medium": "MEDIUM", "low": "LOW"}
+
+
 def _confidence_badge(conf: str) -> str:
     """Return a markdown-friendly colored badge for detection confidence."""
-    color, label = {
-        "high":   ("#1e8e3e", "HIGH"),
-        "medium": ("#b06000", "MEDIUM"),
-        "low":    ("#d93025", "LOW"),
-    }.get(conf, ("#cccccc", "—"))
+    label = _CONFIDENCE_LABELS.get(conf, "—")
+    color = theme.CONFIDENCE_COLORS.get(label, "#cccccc")
     return (
         f"<span style='background:white;color:{color};border:1px solid {color};"
         f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:600;"
