@@ -1,17 +1,12 @@
 """Sidebar uploader: catalog uploaded DICOMs, pick a series, surface load errors.
 
-`render_sidebar()` returns ``(selected_series_uid, sources, local_folder)``:
-
-* ``selected_series_uid`` — UID of the catalog entry the user has chosen.
-* ``sources`` — list of payload bytes for that entry, ready to hand to
-  ``load_series``. ``None`` when nothing's selected or the catalog is
-  empty.
-* ``local_folder`` — string from the "load from local folder" expander
-  (empty when running on Streamlit Cloud).
-
-State sits in ``st.session_state.series_catalog`` and
-``st.session_state.uploader_nonce`` (bumping the nonce re-mounts the
-file_uploader widget as a fresh empty drop zone).
+``render_sidebar()`` returns the local-folder string from the "load from a
+local folder" expander (empty when not used). Everything else is wired
+through session state: the series catalog lives in
+``st.session_state.series_catalog`` and the currently picked entry in
+``st.session_state.selected_series_uid``; the entry point reads those to
+load a series. ``st.session_state.uploader_nonce`` is bumped on each
+batch so the file_uploader widget re-mounts as a fresh empty drop zone.
 """
 
 from __future__ import annotations
@@ -104,7 +99,13 @@ def show_load_error(exc: Exception) -> None:
 
 def render_sidebar(app_version: str) -> str:
     """Render the sidebar uploader + series picker. Returns the contents of
-    the "load from local folder" text input (empty when not used)."""
+    the "load from local folder" text input (empty when not used).
+
+    Side effects: mutates ``st.session_state.series_catalog``,
+    ``st.session_state.selected_series_uid``, and
+    ``st.session_state.uploader_nonce`` so the entry point can pick up
+    the user's choices on rerun.
+    """
     with st.sidebar:
         st.header("Phantom DICOMs")
         st.markdown(
@@ -162,7 +163,7 @@ def render_sidebar(app_version: str) -> str:
         if new_uploads:
             try:
                 new_entries = catalog_uploads(new_uploads)
-            except Exception as exc:  # pragma: no cover - defensive
+            except (zipfile.BadZipFile, OSError, DicomLoadError) as exc:
                 show_load_error(exc)
                 new_entries = []
             existing_uids = {e["uid"] for e in st.session_state.series_catalog}

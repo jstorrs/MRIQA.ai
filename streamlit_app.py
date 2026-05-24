@@ -84,25 +84,22 @@ st.caption(
 # Session state init                                                          #
 # --------------------------------------------------------------------------- #
 
-if "series" not in st.session_state:
-    st.session_state.series = None
-if "results" not in st.session_state:
-    st.session_state.results = {}
-if "history" not in st.session_state:
-    st.session_state.history = []           # list[snapshot]
-if "validation_log" not in st.session_state:
-    st.session_state.validation_log = []    # list[dict]
-if "series_warnings" not in st.session_state:
-    st.session_state.series_warnings = []   # non-fatal warnings from validate_series
-if "series_catalog" not in st.session_state:
-    # Accumulated series across all upload batches in this session. Each entry
-    # is the dict returned by _catalog_uploads — {uid, description, number,
-    # modality, n_files, sources}. Selected by `selected_series_uid`.
-    st.session_state.series_catalog = []
-if "uploader_nonce" not in st.session_state:
-    # Bumping the nonce re-mounts the file_uploader widget as a fresh, empty
-    # drop zone — that's how we hide the persistent "1 file uploaded" list.
-    st.session_state.uploader_nonce = 0
+# series_catalog: accumulated series across upload batches; entries are
+# the dicts returned by catalog_uploads ({uid, description, number,
+# modality, n_files, sources}). Selected by selected_series_uid.
+# uploader_nonce: bumping re-mounts the file_uploader widget as a fresh,
+# empty drop zone so the persistent "1 file uploaded" list goes away.
+_SESSION_DEFAULTS = {
+    "series": None,
+    "results": {},
+    "history": [],
+    "validation_log": [],
+    "series_warnings": [],
+    "series_catalog": [],
+    "uploader_nonce": 0,
+}
+for _k, _v in _SESSION_DEFAULTS.items():
+    st.session_state.setdefault(_k, _v)
 
 
 local_folder = uploads.render_sidebar(APP_VERSION)

@@ -14,8 +14,8 @@ Responsibilities
 
 from __future__ import annotations
 
-import io as _io
 import logging
+from io import BytesIO
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
@@ -98,7 +98,7 @@ def _read_one(source) -> FileDataset | None:
         if hasattr(source, "read"):
             return pydicom.dcmread(source, force=True)
         if isinstance(source, (bytes, bytearray)):
-            return pydicom.dcmread(_io.BytesIO(source), force=True)
+            return pydicom.dcmread(BytesIO(source), force=True)
         return pydicom.dcmread(str(source), force=True)
     except Exception:
         # Anything pydicom raises here (InvalidDicomError, OSError, struct
