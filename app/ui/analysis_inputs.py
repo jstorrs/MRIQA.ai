@@ -48,7 +48,7 @@ def render(
     series_tag = "".join(c if c.isalnum() else "_" for c in str(series_uid))[-32:]
 
     idx0 = series.acr_slice_map.get(1, 0)
-    spec_auto, _ = detect_phantom_spec(
+    spec_auto = detect_phantom_spec(
         series.pixel_array[idx0], series.metadata.pixel_spacing_mm,
     )
     detected_phantom = spec_auto.short_name

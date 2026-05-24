@@ -8,31 +8,28 @@ Deployed: Streamlit Community Cloud points at this file.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import streamlit as st
 
-# ---- make the `app/` package importable --------------------------------- #
-_THIS = Path(__file__).resolve()
-_ROOT = _THIS.parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
-
-from app.io_dicom.dicom_loader import (              # noqa: E402
+# ``streamlit run`` adds the script's directory to sys.path before any
+# `from app...` import resolves, so no manual sys.path manipulation is
+# needed here. See streamlit.web.bootstrap (the line `sys.path.insert(0,
+# os.path.dirname(main_script_path))`).
+from app.io_dicom.dicom_loader import (
     DicomSeries, load_series, validate_series,
 )
-from app.qa_tests import (                              # noqa: E402
+from app.qa_tests import (
     AXIAL_TEST_ORDER, SAGITTAL_TEST_ORDER, AnalysisMode,
 )
-from app.ui import (                                  # noqa: E402
+from app.ui import (
     auth, export, history, landing, manual_scoring,
     results_view, sagittal_analysis, slice_mapping,
     uploads, validation, viewer,
 )
-from app.ui.banner import banner                       # noqa: E402
+from app.ui.banner import banner
 
-EXPORTS_DIR = _ROOT / "exports"
+EXPORTS_DIR = Path(__file__).resolve().parent / "exports"
 EXPORTS_DIR.mkdir(exist_ok=True)
 APP_VERSION = "0.2.0-mvp"
 

@@ -80,31 +80,29 @@ def detect_phantom_spec(
     image: np.ndarray,
     pixel_spacing_mm: tuple[float, float],
     candidates: dict[str, PhantomSpec] | None = None,
-) -> tuple[PhantomSpec, float | None]:
+) -> PhantomSpec:
     """Pick the phantom spec whose nominal diameter is closest to the
-    **left-right width** measured on `image` (typically ACR slice 1, or the
-    sagittal localizer where the axial circumference also runs L-R).
+    **left-right width** measured on ``image`` (typically ACR slice 1, or
+    the sagittal localizer where the axial circumference also runs L-R).
 
-    L-R is used rather than top-bottom or an area-equivalent diameter because
-    air bubbles at the top of the phantom can shrink the mask along the
-    A-P / S-I axis and skew an area-based estimate.
+    L-R is used rather than top-bottom or an area-equivalent diameter
+    because air bubbles at the top of the phantom can shrink the mask
+    along the A-P / S-I axis and skew an area-based estimate.
 
-    Returns ``(spec, measured_width_mm)``; ``measured_width_mm`` is ``None``
-    when segmentation fails or returns an empty mask. The spec falls back to
-    ``default_phantom`` in that case.
+    Falls back to ``default_phantom`` when segmentation fails or returns
+    an empty mask.
     """
     pool = candidates or PHANTOMS
     try:
         geom = localize_phantom(image)
         xs = np.where(geom.mask)[1]
         if xs.size == 0:
-            return default_phantom(), None
+            return default_phantom()
         width_px = float(xs.max() - xs.min() + 1)
         measured_mm = width_px * pixel_spacing_mm[1]
     except (ValueError, IndexError):
-        return default_phantom(), None
-    best = min(pool.values(), key=lambda s: abs(s.diameter_mm - measured_mm))
-    return best, measured_mm
+        return default_phantom()
+    return min(pool.values(), key=lambda s: abs(s.diameter_mm - measured_mm))
 
 
 def phantom_quality_warnings(
