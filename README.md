@@ -59,20 +59,42 @@ The app is designed to deploy on Streamlit Community Cloud (free) in about 20 mi
 ```
 MRIQA.ai/
 ├── streamlit_app.py            # Streamlit entry point (lives at project root)
-├── app/                        # Python package — pure analysis code
+├── app/                        # Python package
 │   ├── io_dicom/dicom_loader.py
 │   ├── qa_tests/               # one module per ACR test
+│   │   ├── base.py             # TestSpec + shared TestResult helpers
 │   │   ├── geometric_accuracy.py
 │   │   ├── slice_thickness.py
 │   │   ├── slice_position.py
 │   │   ├── uniformity.py
 │   │   ├── ghosting.py
 │   │   ├── high_contrast_resolution.py
-│   │   └── low_contrast_detectability.py
+│   │   ├── low_contrast_detectability.py
+│   │   └── localizer_geometry.py   # sagittal S-I length
 │   ├── reporting/
 │   │   ├── pdf_report.py       # ReportLab-based, with cover page + footer
 │   │   └── csv_report.py
-│   └── utils/                  # phantom localization, ROIs, FWHM, viz helpers
+│   ├── ui/                     # Streamlit-facing modules (the only place Streamlit is imported)
+│   │   ├── landing.py
+│   │   ├── uploads.py
+│   │   ├── slice_mapping.py
+│   │   ├── analysis_inputs.py
+│   │   ├── sagittal_analysis.py
+│   │   ├── results_view.py
+│   │   ├── manual_scoring.py
+│   │   ├── viewer.py
+│   │   ├── history.py
+│   │   ├── export.py
+│   │   ├── validation.py
+│   │   ├── badges.py
+│   │   ├── banner.py
+│   │   └── auth.py
+│   └── utils/                  # phantom localization, ROI helpers, geometry, theme, viz
+│       ├── phantom.py
+│       ├── phantom_spec.py
+│       ├── geometry.py
+│       ├── theme.py
+│       └── viz.py
 ├── docs/
 │   ├── feasibility.md          # per-test feasibility analysis
 │   ├── saas_architecture.md    # technical blueprint for cloud SaaS evolution
@@ -88,13 +110,13 @@ MRIQA.ai/
 └── README.md                   # this file
 ```
 
-The analysis code in `app/` has zero dependency on Streamlit. When the project evolves into the full SaaS (architecture in `docs/saas_architecture.md`), the same Python modules lift unchanged into the production backend.
+The analysis code under `app/qa_tests/`, `app/io_dicom/`, `app/reporting/`, and `app/utils/` has zero dependency on Streamlit — Streamlit only appears inside `app/ui/` and `streamlit_app.py`. When the project evolves into the full SaaS (architecture in `docs/saas_architecture.md`), the analysis modules lift unchanged into the production backend.
 
 ---
 
 ## What ACR tests are automated, and at what thresholds
 
-All thresholds come from the **ACR Large and Medium Phantom Test Guidance (Oct 2022)** — committed at the repo root as `MR ACR Large Med Phantom Guidance 102022.pdf` and a text companion. They live in a single `PhantomSpec` dataclass per phantom in `app/utils/phantom_spec.py`, so they're easy to audit, override, and add new phantoms to.
+All thresholds come from the **ACR Large and Medium Phantom Test Guidance (Oct 2022)**. They live in a single `PhantomSpec` dataclass per phantom in `app/utils/phantom_spec.py`, so they're easy to audit, override, and add new phantoms to.
 
 Defaults below are for the **Large** phantom; **Medium** thresholds are tighter where the doc specifies (e.g. ±2 mm geometric tolerance, PIU ≥ 85 % at 3 T).
 
