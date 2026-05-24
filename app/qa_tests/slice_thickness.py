@@ -204,7 +204,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                 f"Slice thickness {thickness_mm:.2f} mm is outside the preferred "
                 f"{nominal:.1f} ± {target_tol:.1f} mm range but within the ACR "
                 f"failure boundary of ±{fail_tol:.1f} mm.",
-                severity="medium",
+                degrade_to="medium",
             )
 
         res.annotated_images.append((
@@ -233,7 +233,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
             res.add_warning(
                 f"A ramp FWHM is very short (top={top_mm:.1f} mm, bot={bot_mm:.1f} mm) — "
                 "low SNR or mis-detected ramp. Check the overlay.",
-                severity="medium",
+                degrade_to="medium",
             )
         if top_mm and bot_mm:
             asym = abs(top_mm - bot_mm) / max(top_mm, bot_mm)
@@ -241,6 +241,6 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                 res.add_warning(
                     f"Top and bottom ramp FWHM differ by {asym*100:.0f}% — the slice may be "
                     "offset from the ramp crossing, or a ramp was mis-detected.",
-                    severity="medium",
+                    degrade_to="medium",
                 )
     return res

@@ -176,7 +176,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                     value=None, unit="mm",
                     spec=f"fail if |Δ| > {failure} mm (preferred ≤ {preferred} mm)", passed=None,
                 ))
-                res.add_warning(f"Slice {acr_slice}: {exc}", severity="medium")
+                res.add_warning(f"Slice {acr_slice}: {exc}", degrade_to="medium")
                 measurement_failures.append(f"Slice {acr_slice}: {exc}")
                 continue
 
@@ -209,13 +209,13 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                     f"Slice {acr_slice} bar-length difference {abs(diff):.2f} mm "
                     f"exceeds the preferred ≤ {preferred:.1f} mm target but remains "
                     f"within the acceptable ≤ {failure:.1f} mm limit.",
-                    severity="medium",
+                    degrade_to="medium",
                 )
             if acr_slice == 11 and abs(diff) > 4.0:
                 res.add_warning(
                     "Slice 11 bar-length difference exceeds 4.0 mm; ACR guidance "
                     "notes this can adversely affect low-contrast detectability.",
-                    severity="medium",
+                    degrade_to="medium",
                 )
 
         if measurement_failures:

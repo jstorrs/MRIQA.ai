@@ -135,7 +135,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         ps = series.metadata.pixel_spacing_mm  # (row, col)
         geom = localize_phantom(img)
         for w in phantom_quality_warnings(geom, ps, spec):
-            res.add_warning(w, severity="medium")
+            res.add_warning(w, degrade_to="medium")
 
         # Large ROI
         r_large = radius_px_for_area_cm2(large_area, ps)
@@ -145,7 +145,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                 f"exceeds the detected phantom radius ({geom.radius_px:.1f} px); "
                 "the ROI may include non-phantom signal and depress the PSG denominator. "
                 "Check the overlay.",
-                severity="medium",
+                degrade_to="medium",
             )
         large_mask = circular_roi_mask(img.shape, geom.cy_px, geom.cx_px, r_large)
         s_large = float(img[large_mask].mean())
@@ -188,7 +188,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                 res.add_warning(
                     f"Air ROI '{name}' mean = {mean:.0f} ({ratio*100:.1f}% of phantom mean) — "
                     "likely overlapping the phantom or near a bright artifact. Check the overlay.",
-                    severity="medium",
+                    degrade_to="medium",
                 )
 
         res.annotated_images.append((

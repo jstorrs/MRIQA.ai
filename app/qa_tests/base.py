@@ -60,15 +60,18 @@ class TestResult:
     def confidence_label(self) -> str:
         return self.confidence.upper()
 
-    def add_warning(self, message: str, severity: Confidence = "medium") -> None:
-        """Record a warning and downgrade confidence accordingly.
+    def add_warning(self, message: str, degrade_to: Confidence = "medium") -> None:
+        """Record a warning and degrade confidence to ``degrade_to``.
 
-        Confidence only ever ratchets *down*: a 'low' followed by a
-        'medium' stays 'low'.
+        ``degrade_to`` names the confidence the warning would *set* —
+        passing ``"low"`` is the most damaging (drops to LOW), passing
+        ``"high"`` records the message without lowering confidence.
+        Confidence only ratchets *down*: a 'low' followed by a 'medium'
+        stays 'low'.
         """
         self.warnings.append(message)
-        if _CONFIDENCE_ORDER[severity] > _CONFIDENCE_ORDER[self.confidence]:
-            self.confidence = severity
+        if _CONFIDENCE_ORDER[degrade_to] > _CONFIDENCE_ORDER[self.confidence]:
+            self.confidence = degrade_to
 
     @contextmanager
     def capture_failures(self) -> Iterator[None]:
@@ -104,9 +107,10 @@ class TestResult:
     ) -> None:
         """Emit standard detection-quality warnings for a numeric measurement.
 
-        * Outside ``plausible`` → severity ``low`` (likely detector failure).
-        * Within range but ``|value - nominal| > big_deviation`` → severity
-          ``medium`` (real-looking but worth a human eyeball).
+        * Outside ``plausible`` → degrades confidence to ``low`` (likely
+          detector failure).
+        * Within range but ``|value - nominal| > big_deviation`` →
+          degrades to ``medium`` (real-looking but worth a human eyeball).
 
         ``context`` is a short hint appended to the warning text — usually a
         cue like "Check the overlay."
@@ -119,7 +123,7 @@ class TestResult:
                 f"{label}: measured {value}{unit_str} is far outside the expected "
                 f"range ({lo}–{hi}{unit_str}) — likely a detector error rather "
                 f"than a real failure.{suffix}",
-                severity="low",
+                degrade_to="low",
             )
             return
         if (
@@ -130,7 +134,7 @@ class TestResult:
             self.add_warning(
                 f"{label}: deviation from nominal ({value} vs {nominal}{unit_str}) "
                 f"exceeds {big_deviation}{unit_str}.{suffix}",
-                severity="medium",
+                degrade_to="medium",
             )
 
 

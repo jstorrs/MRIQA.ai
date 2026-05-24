@@ -280,7 +280,7 @@ def run(
                 res.add_warning(
                     f"Detected {detected_n} resolution grid(s) but the {spec.short_name} "
                     f"spec expects {spec_n}. Verify the crop and the selected phantom variant.",
-                    severity="medium",
+                    degrade_to="medium",
                 )
             count_note += "."
 

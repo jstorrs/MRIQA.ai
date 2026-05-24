@@ -134,7 +134,7 @@ def run(
                 res.add_warning(
                     f"Slice {acr}: LCD chamber crop has no positive signal — "
                     "the chamber may have been mis-localized. Check the overlay.",
-                    severity="medium",
+                    degrade_to="medium",
                 )
 
             res.annotated_images.append((
@@ -181,6 +181,6 @@ def run(
                     "Required LCD slice(s) not mapped: "
                     + ", ".join(str(s) for s in missing_slices)
                     + ".",
-                    severity="medium",
+                    degrade_to="medium",
                 )
     return res

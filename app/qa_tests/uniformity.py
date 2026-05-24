@@ -128,7 +128,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         ps = series.metadata.pixel_spacing_mm
         geom = localize_phantom(img)
         for w in phantom_quality_warnings(geom, ps, spec):
-            res.add_warning(w, severity="medium")
+            res.add_warning(w, degrade_to="medium")
 
         r_large = radius_px_for_area_cm2(large_area, ps)
         r_small = radius_px_for_area_cm2(small_area, ps)
@@ -141,7 +141,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                 f"Prescribed large ROI radius ({r_large:.1f} px) is close to or "
                 f"exceeds the detected phantom radius ({geom.radius_px:.1f} px); "
                 "the ROI may include non-phantom signal. Check the overlay.",
-                severity="medium",
+                degrade_to="medium",
             )
 
         large_mask = circular_roi_mask(img.shape, geom.cy_px, geom.cx_px, r_large)
@@ -164,7 +164,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                 f"Excluded {n_excluded} ROI position(s) overlapping air/void (e.g. the "
                 "phantom's top air bubble) from the uniformity search. Uniformity is "
                 "measured on phantom material only.",
-                severity="medium" if n_excluded > 800 else "high",
+                degrade_to="medium" if n_excluded > 800 else "high",
             )
 
         means = small_mean[ys, xs]
@@ -198,7 +198,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
             res.add_warning(
                 f"PIU = {piu:.2f}% is below the preferred ≥ {target:.1f}% target "
                 f"but above the ACR failure boundary of {failure:.1f}%.",
-                severity="medium",
+                degrade_to="medium",
             )
 
         # --- Detection-quality heuristics ---
@@ -206,13 +206,13 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
             res.add_warning(
                 f"PIU = {piu:.1f}% is outside the plausible range (50–100%); the small-ROI "
                 "search may have included background or air voxels. Check the overlay.",
-                severity="low",
+                degrade_to="low",
             )
         if s_low <= 0:
             res.add_warning(
                 "Lowest small-ROI mean is zero or negative — the ROI may have landed outside "
                 "the phantom.",
-                severity="low",
+                degrade_to="low",
             )
 
         res.annotated_images.append((
