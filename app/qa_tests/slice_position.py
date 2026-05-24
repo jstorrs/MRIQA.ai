@@ -163,7 +163,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                 measurement_failures.append(f"Required ACR slice {acr_slice} is not mapped.")
                 res.measurements.append(Measurement(
                     label=f"Slice {acr_slice} bar-length difference",
-                    value=float("nan"), unit="mm",
+                    value=None, unit="mm",
                     spec=f"fail if |Δ| > {failure} mm (preferred ≤ {preferred} mm)", passed=None,
                 ))
                 continue
@@ -173,7 +173,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
             except ValueError as exc:
                 res.measurements.append(Measurement(
                     label=f"Slice {acr_slice} bar-length difference",
-                    value=float("nan"), unit="mm",
+                    value=None, unit="mm",
                     spec=f"fail if |Δ| > {failure} mm (preferred ≤ {preferred} mm)", passed=None,
                 ))
                 res.add_warning(f"Slice {acr_slice}: {exc}", severity="medium")
