@@ -12,6 +12,8 @@ Axial in-plane diameters (slices 1 & 5) are handled separately by
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
 from ..io_dicom.dicom_loader import DicomSeries
@@ -20,6 +22,9 @@ from ..utils.phantom import localize_phantom
 from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
+
+
+logger = logging.getLogger(__name__)
 
 
 def _draw_si_length(ax, line, si_len: float) -> None:
@@ -57,7 +62,7 @@ def _measure_si_length(localizer: DicomSeries, spec: PhantomSpec):
             col_cos_z = abs(iop[5])    # how much the vertical image axis follows Z
             col_is_si = col_cos_z >= row_cos_z
         except (TypeError, ValueError, IndexError):
-            pass
+            logger.debug("ImageOrientationPatient parse failed", exc_info=True)
 
     ys, xs = np.where(geom.mask)
     if ys.size == 0:

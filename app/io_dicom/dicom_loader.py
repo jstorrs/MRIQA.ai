@@ -452,6 +452,6 @@ def validate_series(series: DicomSeries) -> list[str]:
                     f"axial. {spec.name} procedures assume axial acquisition."
                 )
         except (TypeError, ValueError, IndexError):
-            pass
+            logger.debug("ImageOrientationPatient parse failed", exc_info=True)
 
     return warnings
