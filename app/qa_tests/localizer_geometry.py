@@ -33,12 +33,17 @@ def _draw_si_length(ax, line, si_len: float) -> None:
     )
 
 
-def _measure_si_length(localizer: DicomSeries):
-    """Return (length_mm, image, bbox, line) for the phantom S-I length.
+def _measure_si_length(localizer: DicomSeries, spec: PhantomSpec):
+    """Return ``(length_mm, image, bbox, line, retried)`` for the phantom
+    S-I length.
 
-    bbox is (y0, y1, x0, x1) of the phantom mask. `line` is the two
-    endpoint pixel coords ((y, x), (y, x)) drawn through the phantom
-    along the S-I axis.
+    ``bbox`` is ``(y0, y1, x0, x1)`` of the phantom mask. ``line`` is the
+    two endpoint pixel coords ``((y, x), (y, x))`` drawn through the
+    phantom along the S-I axis. ``retried`` is True when the centerline
+    chord came out implausibly short and the measurement was retaken on
+    an off-axis chord — usually because the phantom's bottom-center
+    notch / fill insert sits on the centerline and the half-max edge
+    detector exits inside the notch.
     """
     img = localizer.pixel_array[0].astype(np.float32)
     geom = localize_phantom(img)
@@ -64,25 +69,47 @@ def _measure_si_length(localizer: DicomSeries):
     H, W = img.shape
     cy_c, cx_c = geom.cy_px, geom.cx_px
 
+    def chord_at(offset_px: float):
+        """Measure an S-I chord offset perpendicular-to-S-I from the centroid."""
+        if col_is_si:
+            L = H * 1.2
+            p0 = (cy_c - L / 2, cx_c + offset_px)
+            p1 = (cy_c + L / 2, cx_c + offset_px)
+            (y_in, x_in), (y_out, x_out) = phantom_chord_endpoints(img, p0, p1)
+            length_mm = abs(y_out - y_in) * ps[0]
+        else:
+            L = W * 1.2
+            p0 = (cy_c + offset_px, cx_c - L / 2)
+            p1 = (cy_c + offset_px, cx_c + L / 2)
+            (y_in, x_in), (y_out, x_out) = phantom_chord_endpoints(img, p0, p1)
+            length_mm = abs(x_out - x_in) * ps[1]
+        return length_mm, ((y_in, x_in), (y_out, x_out))
+
     # Measure along a chord through the phantom centroid using sub-pixel
     # half-max edges (same approach as axial geometric_accuracy), rather
     # than the mask bounding box. The mask extents are sensitive to single
     # noisy edge pixels; the half-max chord matches the in-plane diameters.
-    if col_is_si:
-        L = H * 1.2
-        p0 = (cy_c - L / 2, cx_c)
-        p1 = (cy_c + L / 2, cx_c)
-        (y_in, x_in), (y_out, x_out) = phantom_chord_endpoints(img, p0, p1)
-        length_mm = abs(y_out - y_in) * ps[0]
-    else:
-        L = W * 1.2
-        p0 = (cy_c, cx_c - L / 2)
-        p1 = (cy_c, cx_c + L / 2)
-        (y_in, x_in), (y_out, x_out) = phantom_chord_endpoints(img, p0, p1)
-        length_mm = abs(x_out - x_in) * ps[1]
-    line = ((y_in, x_in), (y_out, x_out))
+    length_mm, line = chord_at(0.0)
 
-    return length_mm, img, (y0, y1, x0, x1), line
+    # The ACR phantom has a fill-port notch on the bottom face that often
+    # sits on the S-I centerline. The half-max edge detector exits at the
+    # top of the notch instead of the phantom's outer edge, producing a
+    # length way below the spec nominal. When that happens, retake the
+    # measurement on chords ±1 cm to either side of the centroid and keep
+    # the longest — those chords land on solid phantom and miss the notch.
+    retried = False
+    if length_mm < 0.8 * spec.si_length_mm:
+        offset_px = 10.0 / (ps[1] if col_is_si else ps[0])
+        best_len, best_line = length_mm, line
+        for off in (offset_px, -offset_px):
+            alt_len, alt_line = chord_at(off)
+            if alt_len > best_len:
+                best_len, best_line = alt_len, alt_line
+        if best_len > length_mm:
+            length_mm, line = best_len, best_line
+            retried = True
+
+    return length_mm, img, (y0, y1, x0, x1), line, retried
 
 
 def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
@@ -97,7 +124,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         passed=True,
     )
     with res.capture_failures():
-        si_len, img, _, line = _measure_si_length(series)
+        si_len, img, _, line, retried = _measure_si_length(series, spec)
         passed = abs(si_len - nominal_si) <= tol
         res.measurements.append(Measurement(
             label="Superior-inferior length",
@@ -122,6 +149,16 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
             "Edges via phantom mask extents; the S-I axis is taken from the "
             "DICOM ImageOrientationPatient tag."
         )
+
+        if retried:
+            res.add_warning(
+                "The centerline S-I chord came out implausibly short; the "
+                "phantom's bottom-center notch / fill insert likely sat on "
+                "the centerline. Retook the measurement on a chord 10 mm "
+                "off-center. Confirm the red line in the overlay lands on "
+                "solid phantom, not on the notch.",
+                severity="medium",
+            )
 
         res.flag_if_implausible(
             "Superior-inferior length",
