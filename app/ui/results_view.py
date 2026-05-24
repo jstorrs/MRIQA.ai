@@ -145,13 +145,18 @@ def render(
             rows.append({"Test": t.id, "Status": "—", "Confidence": "—", "Detail": ""})
             continue
         key = r.measurements[0] if r.measurements else None
+        if key is None:
+            detail = ""
+        else:
+            value_str = "—" if key.value is None else f"{key.value}"
+            detail = f"{key.label}: {value_str} {key.unit}"
+            if key.spec:
+                detail += f" · spec {key.spec}"
         rows.append({
             "Test": r.test_name,
             "Status": r.status_text(),
             "Confidence": r.confidence_label(),
-            "Detail": (f"{key.label}: {key.value} {key.unit}" if key else "") + (
-                f" · spec {key.spec}" if key and key.spec else ""
-            ),
+            "Detail": detail,
             "Error": r.error or "",
         })
     st.dataframe(rows, hide_index=True, width="stretch")

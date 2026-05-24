@@ -29,7 +29,7 @@ _CONFIDENCE_ORDER: dict[Confidence, int] = {"high": 0, "medium": 1, "low": 2}
 @dataclass
 class Measurement:
     label: str
-    value: float
+    value: Optional[float]      # None when the user/detector hasn't recorded one
     unit: str
     spec: str = ""              # e.g. "190 +/- 2 mm"
     passed: Optional[bool] = None

@@ -310,7 +310,7 @@ def run(
             lr = user_input.get("LR")
             def _mark(label, val):
                 if val is None:
-                    res.measurements.append(Measurement(label, value=float("nan"), unit="mm"))
+                    res.measurements.append(Measurement(label, value=None, unit="mm"))
                     return None
                 passed = float(val) <= threshold  # smaller resolvable spacing is better
                 res.measurements.append(Measurement(

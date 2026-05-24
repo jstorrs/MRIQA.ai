@@ -196,13 +196,17 @@ def _verdict_box(verdict: str, counts: dict) -> Table:
     return tbl
 
 
+def _fmt_value(v: float | None) -> str:
+    return "—" if v is None else str(v)
+
+
 def _summary_table(results: list[TestResult]) -> Table:
     rows = [["#", "Test", "Status", "Conf.", "Key measurement"]]
     for i, r in enumerate(results, 1):
         key = ""
         if r.measurements:
             m = r.measurements[0]
-            key = f"{m.label}: {m.value} {m.unit}".strip()
+            key = f"{m.label}: {_fmt_value(m.value)} {m.unit}".strip()
             if m.spec:
                 key += f"   (spec {m.spec})"
         rows.append([str(i), r.test_name, r.status_text(), r.confidence_label(), key])
@@ -235,7 +239,7 @@ def _measurements_table(r: TestResult) -> Table:
     rows = [["Measurement", "Value", "Unit", "Spec", "Pass"]]
     for m in r.measurements:
         passed = "" if m.passed is None else ("✓" if m.passed else "✗")
-        rows.append([m.label, f"{m.value}", m.unit, m.spec, passed])
+        rows.append([m.label, _fmt_value(m.value), m.unit, m.spec, passed])
     tbl = Table(rows, colWidths=[2.6 * inch, 1.0 * inch, 0.7 * inch, 2.0 * inch, 0.5 * inch])
     tbl.setStyle(TableStyle([
         ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 9),
