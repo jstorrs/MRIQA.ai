@@ -60,20 +60,26 @@ def render(
             "This is unusual — confirm before running QA."
         )
 
+    old_map = {role: series.acr_slice_map.get(role) for role in new_map}
+    if old_map != new_map and st.session_state.results:
+        st.session_state.results = {}
+        st.session_state.pop("_visual_hcr_cache", None)
+        st.session_state.pop("_visual_lcd_cache", None)
+        st.info("Slice mapping changed; prior results were cleared.")
     series.acr_slice_map = {**series.acr_slice_map, **new_map}
     st.session_state.series = series
 
     st.divider()
     st.markdown("### Run automated tests")
     st.caption(
-        "Runs the five automated ACR tests against the slice mapping above. "
+        "Runs the automated tests applicable to the selected ACR series against the slice mapping above. "
         "The two visual tests (HCR, LCD) are scored separately on the "
         "**Manual scoring** tab — typically only worth doing once the "
         "automated tests pass."
     )
     if st.button("Run all automated tests", type="primary"):
         results = dict(st.session_state.results)
-        results.update(results_view.run_automated_tests(series, test_order))
+        results.update(results_view.run_automated_tests(series, test_order, analysis_mode))
         st.session_state.results = results
         st.rerun()
 

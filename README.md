@@ -1,6 +1,6 @@
 # MRIQA.ai — ACR Large Phantom QA (MVP)
 
-A pilot-ready Streamlit web app that ingests an MRI DICOM series of the **ACR Large or Medium MRI Phantom** and runs the seven QA tests defined in the ACR MRI Quality Control Manual and the *ACR Large and Medium Phantom Test Guidance (Oct 2022)*. Five tests are fully automated; two visual scoring tests open inside the app with zoomed views.
+A pilot-ready Streamlit web app that ingests an MRI DICOM series of the **ACR Large or Medium MRI Phantom** and evaluates the ACR tests applicable to the selected series using the *ACR Large and Medium Phantom Test Guidance (Oct 2022)*. T1 selected-series analysis includes five automated tests; T2 omits the T1-only geometric-accuracy and ghosting measurements. Two visual scoring tests open inside the app with zoomed views.
 
 **Status:** MVP. **Audience:** medical physicists, QA technologists, imaging-center pilots.
 **Not a medical device. Not for diagnostic use.**
@@ -11,7 +11,7 @@ A pilot-ready Streamlit web app that ingests an MRI DICOM series of the **ACR La
 
 - Drag-and-drop DICOM upload (zip or individual `.dcm` files)
 - Auto-mapping of ACR slice roles (1, 5, 7, 11) with manual override
-- Five automated tests: **Geometric Accuracy · Slice Thickness · Slice Position · Image Intensity Uniformity (PIU) · Percent Signal Ghosting (PSG)**
+- Applicable automated tests by selected series: **Geometric Accuracy** and **PSG** on ACR T1 only; **Slice Thickness · Slice Position · PIU** on ACR T1/T2
 - Two visual scoring tests: **High-Contrast Spatial Resolution · Low-Contrast Object Detectability**
 - Polished results page with overall verdict, status badges, annotated images per test
 - In-browser-session history of completed runs
@@ -121,20 +121,21 @@ All thresholds come from the **ACR Large and Medium Phantom Test Guidance (Oct 2
 Defaults below are for the **Large** phantom; **Medium** thresholds are tighter where the doc specifies (e.g. ±2 mm geometric tolerance, PIU ≥ 85 % at 3 T).
 
 The app runs one of two analyses depending on the series picked: the
-**axial series analysis** (11-slice ACR protocol, the seven tests below) or
+**axial selected-series analysis** (11-slice ACR series, applicable tests below) or
 the **sagittal localizer analysis** (single sagittal image, S-I length only).
+It does not combine ACR T1/T2 and site-series results into an accreditation determination.
 
 **Axial series analysis**
 
 | # | Test                              | Automation        | Slice    | Large-phantom threshold                                       |
 |---|-----------------------------------|-------------------|----------|---------------------------------------------------------------|
-| 1 | Geometric Accuracy (axial)        | Automated         | 1, 5     | 190 mm ± 3 mm diameters                                       |
-| 2 | High-Contrast Spatial Resolution  | User confirmation | 1        | 1.0 mm row resolvable in UL and LR (configurable)             |
-| 3 | Slice Thickness Accuracy          | Automated         | 1        | 5.0 mm ± 0.7 mm                                               |
-| 4 | Slice Position Accuracy           | Automated         | 1, 11    | \|bar offset\| ≤ 5 mm                                         |
-| 5 | Image Intensity Uniformity (PIU)  | Automated         | 7        | ≥ 87.5 % at < 3 T; ≥ 82 % at 3 T                              |
-| 6 | Percent Signal Ghosting (PSG)     | Automated         | 7        | ≤ 3.0 %                                                       |
-| 7 | Low-Contrast Object Detectability | User confirmation | 8–11     | ≥ 37 total spokes at 3 T; ≥ 30 at 1.5 T (ACR-T1)              |
+| 1 | Geometric Accuracy (axial, T1 only) | Automated      | 1, 5     | 190 mm ± 3 mm diameters                                       |
+| 2 | High-Contrast Spatial Resolution  | User confirmation | 1        | ≤1.0 mm in UL rows and LR columns                              |
+| 3 | Slice Thickness Accuracy          | Automated         | 1        | preferred 5.0 ± 0.7 mm; fails outside ±1.0 mm                 |
+| 4 | Slice Position Accuracy           | Automated         | 1, 11    | preferred \|Δ\| ≤5 mm; fails if \|Δ\| >7 mm                   |
+| 5 | Image Intensity Uniformity (PIU)  | Automated         | 7        | target ≥87.5/82%; fails below 85/80% (<3 T/≥3 T)              |
+| 6 | Percent Signal Ghosting (PSG, T1 only) | Automated   | 7        | ≤ 3.0 %                                                       |
+| 7 | Low-Contrast Object Detectability | User confirmation | 8–11     | ≥7 (<1.5 T); T1/T2 ≥30/25 (1.5–<3 T); ≥37 (≥3 T)             |
 
 **Sagittal localizer analysis**
 

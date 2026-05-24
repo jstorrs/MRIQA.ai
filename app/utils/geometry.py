@@ -18,6 +18,13 @@ def radius_px_for_area_cm2(area_cm2: float, pixel_spacing_mm) -> float:
     return math.sqrt(area_mm2 / px_area_mm2 / math.pi)
 
 
+def ellipse_axes_for_area_cm2(area_cm2: float, aspect_ratio: float) -> tuple[float, float]:
+    """Return ``(long_axis_mm, short_axis_mm)`` for an ellipse of the requested area."""
+    area_mm2 = area_cm2 * 100.0
+    short_axis_mm = math.sqrt(4.0 * area_mm2 / (math.pi * aspect_ratio))
+    return short_axis_mm * aspect_ratio, short_axis_mm
+
+
 def contiguous_runs(mask) -> list[tuple[int, int]]:
     """Return inclusive ``(start, end)`` index pairs for every run of truthy
     values in a 1D sequence.

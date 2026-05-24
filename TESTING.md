@@ -19,7 +19,7 @@ A minimum of three anonymized ACR Large Phantom DICOM datasets. Ideal mix:
 
 **De-identify every dataset before uploading**, even to the local app. Strip patient name, MRN, accession, birth date. Keep acquisition parameters (TR/TE/FOV/matrix/slice thickness/pixel spacing) — the analysis needs them.
 
-For each dataset, have your own manual QA results ready: the numbers you measured (or your existing tool measured) for at least the five automated tests. This is the ground truth the app gets compared against.
+For each dataset, have your own manual QA results ready for tests applicable to that selected series. ACR T1 includes five automated tests; ACR T2 excludes T1-only axial geometric accuracy and PSG. This is the ground truth the app gets compared against.
 
 ---
 
@@ -47,16 +47,16 @@ Click each preview to enlarge if needed. If anything looks wrong, override the m
 
 ### 3. Run the QA
 
-On the **Run QA** tab, click **Run all automated tests**. Watch the progress bar. The five automated tests should each complete in seconds. If any errors out, note the test name — that's a bug to report.
+On the **Analysis** tab, click **Run all automated tests**. Watch the progress bar. Applicable tests should each complete in seconds. If any errors out on complete, correctly mapped data, note the test name — that's a bug to report.
 
 For the two visual tests:
 
-- High-contrast resolution: in the Results tab, look at the UL and LR zoomed crops on slice 1. Find the smallest hole-row where you can still see all four rows. Enter those values back on the Run QA tab and click **Save resolution scoring**.
-- Low-contrast detectability: in the Results tab, look at slices 8–11. Count the complete spokes on each. Enter the counts back on the Run QA tab and click **Save LCD scoring**.
+- High-contrast resolution: on **Manual scoring**, find the smallest size where all four holes are distinguishable in any UL row and any LR column. The passing limit is fixed at ≤1.0 mm.
+- Low-contrast detectability: on **Manual scoring**, look at slices 8–11, count complete spokes on each, and save the scoring.
 
 ### 4. Verify every overlay
 
-This is the most important step. Switch to **Results**. For each of the five automated tests:
+This is the most important step. Switch to **Results**. For each automated test shown for the selected series:
 
 - Open the test's section (clicking the row expands it).
 - Look at the **annotated image**.

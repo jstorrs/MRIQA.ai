@@ -22,7 +22,7 @@ Out of scope for the MVP: user accounts, persistent storage, encrypted at-rest d
 | 1 | Geometric Accuracy | 1, 5 | Half-max chord through centroid in 4 orientations on slice 5 + S-I on slice 1 | Automated | High |
 | 2 | High-Contrast Spatial Resolution | 1 | Visual scoring of UL/LR hole arrays (1.1 / 1.0 / 0.9 mm) | **User-confirmation** | Reliable automated scoring needs ML or strong heuristics; not appropriate for MVP |
 | 3 | Slice Thickness Accuracy | 1 | FWHM of two ramp bars, `0.2 * top * bot / (top + bot)` | Automated | Medium — depends on robust ramp localization; UI shows annotated ROIs so it is easy to sanity-check |
-| 4 | Slice Position Accuracy | 1, 11 | FWHM of vertical wedge pair, report `left − right` | Automated | Medium — wedge localization is heuristic but visible |
+| 4 | Slice Position Accuracy | 1, 11 | FWHM of vertical wedge pair, report `right − left` per ACR sign convention | Automated | Medium — wedge localization is heuristic but visible |
 | 5 | Image Intensity Uniformity (PIU) | 7 | Large ROI (200 cm²) + small ROI mean min/max, ACR formula | Automated | High — well-defined ACR algorithm |
 | 6 | Percent Signal Ghosting (PSG) | 7 | Large interior ROI + 4 air ROIs (top/bot/left/right), ACR formula | Automated | High |
 | 7 | Low-Contrast Object Detectability | 8-11 | Count complete spokes per slice | **User-confirmation** | Visual scoring; automatable later with ML |
@@ -90,10 +90,10 @@ We have not yet executed the app against the uploaded Siemens Skyra series (no D
 4. Upload `ACR test images/T1` (or zip it) and click *Run all automated tests*.
 5. Confirm:
    - **Geometric Accuracy:** slice 5 horizontal & vertical diameters near 190 mm; slice 1 short-axis ~148 mm.
-   - **PIU:** ≥ 87.5% (Skyra is 3 T per DICOM metadata).
+   - **PIU:** target ≥82%; fails below 80% for a 3 T Large phantom.
    - **PSG:** ≤ 3%.
-   - **Slice thickness:** 5 mm ± 0.7 mm.
-   - **Slice position:** |Δ| ≤ 5 mm on slices 1 and 11.
+   - **Slice thickness:** preferred 5 mm ± 0.7 mm; fails outside ±1.0 mm.
+   - **Slice position:** preferred |Δ| ≤ 5 mm; fails above 7 mm on slices 1 and 11.
 
 If any test produces an obviously wrong number, the annotated image in the *Results* tab will show *where* the detector ran. Two failure modes to expect on first run:
 

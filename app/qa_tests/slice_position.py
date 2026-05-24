@@ -10,9 +10,9 @@ makes one bar longer than the other.
 
 We measure the vertical length of the left bar and the right bar and report
 
-    bar_difference = left_length - right_length   (mm)
+    bar_difference = right_length - left_length   (mm)
 
-Action limit: |bar_difference| ≤ 5 mm.
+Preferred target: |bar_difference| ≤ 5 mm; values greater than 7 mm fail.
 
 Algorithm
 ---------
@@ -113,7 +113,7 @@ def _measure_one(img: np.ndarray, ps_row: float) -> _BarMeasurement:
     return _BarMeasurement(
         left_len=left_len,
         right_len=right_len,
-        bar_diff=left_len - right_len,
+        bar_diff=right_len - left_len,
         left_col=int(np.median(left)),
         right_col=int(np.median(right)),
         top=top_shared,
@@ -146,7 +146,8 @@ def _draw_slice_position(ax, m: _BarMeasurement, acr_slice: int) -> None:
 
 def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
     spec = spec or series.spec
-    tol = spec.bar_diff_tolerance_mm
+    preferred = spec.bar_diff_preferred_mm
+    failure = spec.bar_diff_failure_mm
     res = TestResult(
         test_id="slice_position",
         test_name="Slice Position Accuracy",
@@ -155,9 +156,16 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
     )
     with res.capture_failures():
         ps = series.metadata.pixel_spacing_mm
+        measurement_failures: list[str] = []
         for acr_slice in (1, 11):
             slice_img = series.try_slice(acr_slice)
             if slice_img is None:
+                measurement_failures.append(f"Required ACR slice {acr_slice} is not mapped.")
+                res.measurements.append(Measurement(
+                    label=f"Slice {acr_slice} bar-length difference",
+                    value=float("nan"), unit="mm",
+                    spec=f"fail if |Δ| > {failure} mm (preferred ≤ {preferred} mm)", passed=None,
+                ))
                 continue
             img = slice_img.astype(np.float32)
             try:
@@ -166,17 +174,18 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                 res.measurements.append(Measurement(
                     label=f"Slice {acr_slice} bar-length difference",
                     value=float("nan"), unit="mm",
-                    spec=f"|Δ| ≤ {tol} mm", passed=None,
+                    spec=f"fail if |Δ| > {failure} mm (preferred ≤ {preferred} mm)", passed=None,
                 ))
                 res.add_warning(f"Slice {acr_slice}: {exc}", severity="medium")
+                measurement_failures.append(f"Slice {acr_slice}: {exc}")
                 continue
 
             diff = m.bar_diff
-            passed = abs(diff) <= tol
+            passed = abs(diff) <= failure
             res.measurements.append(Measurement(
                 label=f"Slice {acr_slice} bar-length difference",
                 value=round(diff, 2), unit="mm",
-                spec=f"|Δ| ≤ {tol} mm", passed=passed,
+                spec=f"fail if |Δ| > {failure} mm (preferred ≤ {preferred} mm)", passed=passed,
             ))
 
             res.annotated_images.append((
@@ -195,10 +204,29 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                 unit="mm",
                 context="The bar detector may have caught the wrong feature. Check the overlay.",
             )
+            if preferred < abs(diff) <= failure:
+                res.add_warning(
+                    f"Slice {acr_slice} bar-length difference {abs(diff):.2f} mm "
+                    f"exceeds the preferred ≤ {preferred:.1f} mm target but remains "
+                    f"within the acceptable ≤ {failure:.1f} mm limit.",
+                    severity="medium",
+                )
+            if acr_slice == 11 and abs(diff) > 4.0:
+                res.add_warning(
+                    "Slice 11 bar-length difference exceeds 4.0 mm; ACR guidance "
+                    "notes this can adversely affect low-contrast detectability.",
+                    severity="medium",
+                )
 
-        res.finalize_pass()
+        if measurement_failures:
+            res.passed = None
+            res.error = " ".join(measurement_failures)
+        else:
+            res.finalize_pass()
         res.notes = (
             "Left/right bar lengths measured from the shared phantom rim to each bar's "
-            f"sub-pixel bottom edge. Δ = left − right; action limit |Δ| ≤ {tol:.0f} mm."
+            f"sub-pixel bottom edge. Δ = right − left (a longer left bar is negative); "
+            f"preferred |Δ| ≤ {preferred:.0f} mm; "
+            f"values greater than {failure:.0f} mm fail."
         )
     return res

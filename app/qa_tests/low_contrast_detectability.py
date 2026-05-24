@@ -14,7 +14,7 @@ four slices.
 
 Action limits (per § Table 5), applied to the total spoke count:
     - 3 T:        ≥ 37 (both ACR-T1 and ACR-T2)
-    - 1.5–<3 T:  ACR-T1 ≥ 30, ACR-T2 ≥ 25 (this engine uses the T1 value)
+    - 1.5–<3 T:  ACR-T1 ≥ 30, ACR-T2 ≥ 25
     - < 1.5 T:    ≥ 7
 
 The limits are identical for Large and Medium phantoms.
@@ -28,7 +28,7 @@ from skimage.measure import label, regionprops
 
 from ..io_dicom.dicom_loader import DicomSeries
 from ..utils.phantom import localize_phantom
-from ..utils.phantom_spec import PhantomSpec
+from ..utils.phantom_spec import PhantomSpec, is_high_field, is_low_field
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
 
@@ -38,6 +38,17 @@ def _draw_lcd_title(ax, acr: int) -> None:
         f"Slice {acr} — low-contrast spokes (count complete spokes)",
         fontsize=9,
     )
+
+
+def _threshold_for(series: DicomSeries, spec: PhantomSpec) -> int:
+    field_strength = series.metadata.field_strength_t
+    if is_high_field(field_strength):
+        return spec.lcd_threshold_3t
+    if is_low_field(field_strength):
+        return spec.lcd_threshold_sub_1_5t
+    if series.metadata.sequence == "T2":
+        return spec.lcd_threshold_midfield_t2
+    return spec.lcd_threshold_midfield_t1
 
 
 def _lcd_chamber_center(img: np.ndarray, phantom_mask: np.ndarray) -> tuple[float, float] | None:
@@ -80,9 +91,11 @@ def run(
         passed=None,
     )
     with res.capture_failures():
+        missing_slices: list[int] = []
         for acr in lcd_slices:
-            slice_img = series.try_slice(acr, spec_fallback=True)
+            slice_img = series.try_slice(acr)
             if slice_img is None:
+                missing_slices.append(acr)
                 continue
             img = slice_img.astype(np.float32)
             geom = localize_phantom(img)
@@ -143,13 +156,7 @@ def run(
                     value=float(v),
                     unit="spokes",
                 ))
-            is_3t = series.metadata.field_strength_t >= 3.0 - 0.05
-            if is_3t:
-                threshold = spec.lcd_threshold_3t
-            elif series.metadata.sequence == "T2":
-                threshold = spec.lcd_threshold_lowfield_t2
-            else:
-                threshold = spec.lcd_threshold_lowfield_t1
+            threshold = _threshold_for(series, spec)
             slice_range = f"{lcd_slices[0]}–{lcd_slices[-1]}"
             res.measurements.append(Measurement(
                 label=f"Total spokes (slices {slice_range})",
@@ -158,7 +165,22 @@ def run(
                 spec=f"≥ {threshold}",
                 passed=total >= threshold,
             ))
-            res.passed = total >= threshold
+            if missing_slices:
+                res.error = (
+                    "Required LCD slice(s) not mapped: "
+                    + ", ".join(str(s) for s in missing_slices)
+                    + "."
+                )
+                res.passed = None
+            else:
+                res.passed = total >= threshold
         else:
             res.notes = "Count complete spokes on each slice and enter values in the UI."
+            if missing_slices:
+                res.add_warning(
+                    "Required LCD slice(s) not mapped: "
+                    + ", ".join(str(s) for s in missing_slices)
+                    + ".",
+                    severity="medium",
+                )
     return res

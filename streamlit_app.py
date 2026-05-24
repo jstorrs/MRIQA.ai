@@ -167,8 +167,8 @@ if analysis_mode == "sagittal":
     banner("<b>Sagittal localizer analysis</b> — single-image S-I length check.")
 else:
     banner(
-        f"<b>Axial series analysis</b> — {len(AXIAL_TEST_ORDER)}-test ACR protocol "
-        f"({md.n_slices} slices loaded)."
+        f"<b>Axial selected-series analysis</b> — ACR {md.sequence} series "
+        f"({md.n_slices} slices loaded). Results are not a combined accreditation determination."
     )
 
 # --------------------------------------------------------------------------- #
@@ -245,4 +245,4 @@ with tab_history:
 with tab_validation:
     validation.render(series, test_order, analysis_mode)
 with tab_export:
-    export.render(series, test_order, EXPORTS_DIR, APP_VERSION)
+    export.render(series, test_order, analysis_mode, EXPORTS_DIR, APP_VERSION)

@@ -41,7 +41,8 @@ def _cached_visual_images(
 def _render_hcr(series: DicomSeries) -> None:
     st.markdown("### High-contrast resolution")
     st.caption(
-        "On slice 1, look at the UL and LR hole arrays in the zoomed crops below."
+        "On slice 1, score the smallest size with four distinguishable holes "
+        "in any UL row and any LR column."
     )
     images = _cached_visual_images(
         "_visual_hcr_cache", series,
@@ -59,15 +60,11 @@ def _render_hcr(series: DicomSeries) -> None:
     )
     if not res_sizes:
         res_sizes = list(series.spec.resolution_array_sizes_mm)
-    res_default_idx = (
-        res_sizes.index(series.spec.resolution_pass_threshold_mm)
-        if series.spec.resolution_pass_threshold_mm in res_sizes
-        else len(res_sizes) // 2
+    st.caption(
+        f"ACR passing criterion is fixed: both directions must resolve "
+        f"≤ {series.spec.resolution_pass_threshold_mm:.1f} mm."
     )
-    cspec, cul, clr = st.columns(3)
-    threshold = cspec.selectbox(
-        "Required smallest row (mm)", res_sizes, index=res_default_idx,
-    )
+    cul, clr = st.columns(2)
     ul = cul.selectbox(
         "UL smallest resolvable", [None, *res_sizes],
         format_func=lambda x: "—" if x is None else f"{x} mm",
@@ -79,7 +76,7 @@ def _render_hcr(series: DicomSeries) -> None:
     if st.button("Save resolution scoring"):
         res = high_contrast_resolution.run(
             series, spec=series.spec,
-            user_input={"UL": ul, "LR": lr, "spec": threshold},
+            user_input={"UL": ul, "LR": lr},
         )
         st.session_state.results["high_contrast_resolution"] = res
         st.success("Saved.")

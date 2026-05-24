@@ -168,7 +168,8 @@ def _measure_ramp_fwhms(
 def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
     spec = spec or series.spec
     nominal = spec.nominal_slice_thickness_mm
-    tol = spec.slice_thickness_tolerance_mm
+    target_tol = spec.slice_thickness_target_tolerance_mm
+    fail_tol = spec.slice_thickness_failure_tolerance_mm
     res = TestResult(
         test_id="slice_thickness",
         test_name="Slice Thickness Accuracy",
@@ -193,8 +194,8 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
             label="Measured slice thickness",
             value=round(thickness_mm, 2),
             unit="mm",
-            spec=f"{nominal} ± {tol} mm",
-            passed=abs(thickness_mm - nominal) <= tol,
+            spec=f"fail if outside {nominal} ± {fail_tol} mm (target ± {target_tol} mm)",
+            passed=abs(thickness_mm - nominal) <= fail_tol,
         )
         res.measurements.append(m)
         res.measurements.append(Measurement("Top ramp FWHM", round(top_mm, 2), "mm"))
@@ -203,8 +204,15 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         res.notes = (
             "Slice thickness = 0.2 × top × bot / (top + bot). FWHM of the two bright "
             "signal ramps inside the slice-thickness void band, measured at half-max "
-            "above the void baseline."
+            f"above the void baseline. Preferred target is {nominal:.1f} ± {target_tol:.1f} mm."
         )
+        if target_tol < abs(thickness_mm - nominal) <= fail_tol:
+            res.add_warning(
+                f"Slice thickness {thickness_mm:.2f} mm is outside the preferred "
+                f"{nominal:.1f} ± {target_tol:.1f} mm range but within the ACR "
+                f"failure boundary of ±{fail_tol:.1f} mm.",
+                severity="medium",
+            )
 
         res.annotated_images.append((
             f"Slice 1 — slice-thickness ramps (={thickness_mm:.2f} mm)",

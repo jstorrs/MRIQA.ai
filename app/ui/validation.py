@@ -14,7 +14,7 @@ from datetime import datetime
 import streamlit as st
 
 from ..io_dicom.dicom_loader import DicomSeries
-from ..qa_tests import AnalysisMode, TestSpec
+from ..qa_tests import AnalysisMode, TestSpec, applicable_test_order
 from ..qa_tests.base import verdict_of
 
 
@@ -94,7 +94,7 @@ def _build_log_row(
         "error_count":     counts["ERROR"],
         "analysis_mode":   analysis_mode,
     }
-    for t in test_order:
+    for t in applicable_test_order(test_order, analysis_mode, md.sequence):
         r = st.session_state.results.get(t.id)
         if r is None:
             continue

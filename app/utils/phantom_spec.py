@@ -12,11 +12,6 @@ Phantom Test Guidance, 10.19.2022** (file
 ``MR_ACR_Large_Med_Phantom_Guidance_102022`` at the project root).
 Specific section references are noted on each field.
 
-Where the 2022 guidance lists separate ACR-T1 and ACR-T2 LCD thresholds
-for the same field-strength band, the engine uses the stricter of the
-two (T1) since the current run() loop applies a single threshold per
-series.
-
 LARGE values were updated from earlier 2015-era MVP defaults to align
 with the 2022 guidance — most notably:
   * Geometric-accuracy tolerance ±2.0 → ±3.0 mm (§ 1.4 / Table 3).
@@ -53,10 +48,12 @@ class PhantomSpec:
 
     # --- slice 1: slice thickness ---
     nominal_slice_thickness_mm: float      # 5.0 mm for both ACR phantoms
-    slice_thickness_tolerance_mm: float    # ± tolerance
+    slice_thickness_target_tolerance_mm: float  # preferred ± range
+    slice_thickness_failure_tolerance_mm: float # error greater than this fails
 
     # --- slice 1 & 11: slice position ---
-    bar_diff_tolerance_mm: float           # |left-right bar length| ≤ this
+    bar_diff_preferred_mm: float           # preferred |left-right bar length| ≤ this
+    bar_diff_failure_mm: float             # values greater than this fail
 
     # --- slice 1: high-contrast resolution insert ---
     resolution_array_sizes_mm: tuple[float, ...]   # ordered largest→smallest
@@ -65,21 +62,23 @@ class PhantomSpec:
     # --- slice 7: image intensity uniformity (PIU) ---
     piu_large_roi_area_cm2: float          # large ROI area
     piu_small_roi_area_cm2: float          # sliding small ROI area
-    piu_threshold_lowfield_percent: float  # action limit < 3 T
-    piu_threshold_3t_percent: float        # action limit ≥ 3 T
+    piu_target_lowfield_percent: float     # preferred target < 3 T
+    piu_target_3t_percent: float           # preferred target ≥ 3 T
+    piu_failure_lowfield_percent: float    # value below this fails < 3 T
+    piu_failure_3t_percent: float          # value below this fails ≥ 3 T
 
     # --- slice 7: percent signal ghosting (PSG) ---
     ghosting_large_roi_area_cm2: float
-    ghosting_air_roi_long_mm: float
-    ghosting_air_roi_short_mm: float
-    ghosting_air_offset_mm: float          # distance outside phantom edge for the four air ROIs
+    ghosting_air_roi_area_cm2: float
+    ghosting_air_roi_aspect_ratio: float
     ghosting_threshold_percent: float
 
     # --- slices 8–11: low-contrast object detectability (LCD) ---
     lcd_slices: tuple[int, ...]            # ACR slice roles containing spoke patterns
     lcd_threshold_3t: int                  # total spokes required at ≥ 3 T (T1 & T2 the same)
-    lcd_threshold_lowfield_t1: int         # total spokes required at < 3 T for an ACR-T1 scan
-    lcd_threshold_lowfield_t2: int         # total spokes required at < 3 T for an ACR-T2 scan
+    lcd_threshold_midfield_t1: int         # total spokes required at 1.5–<3 T for ACR-T1
+    lcd_threshold_midfield_t2: int         # total spokes required at 1.5–<3 T for ACR-T2
+    lcd_threshold_sub_1_5t: int            # total spokes required below 1.5 T
     # Half-width of the LCD spoke pattern in physical mm. The disk-spoke
     # insert is the same physical size in the Large and Medium phantoms, so
     # the on-screen crop is anchored to mm rather than to phantom radius.
@@ -103,9 +102,11 @@ LARGE = PhantomSpec(
     slice_role_indices={1: 0, 5: 4, 7: 6, 8: 7, 9: 8, 10: 9, 11: 10},
     # § 3.4 — slice thickness limits are identical between Large and Medium
     nominal_slice_thickness_mm=5.0,
-    slice_thickness_tolerance_mm=0.7,
+    slice_thickness_target_tolerance_mm=0.7,
+    slice_thickness_failure_tolerance_mm=1.0,
     # § 4.4 — slice position limits are identical between Large and Medium
-    bar_diff_tolerance_mm=5.0,
+    bar_diff_preferred_mm=5.0,
+    bar_diff_failure_mm=7.0,
     # § Table 1 + § 2.2 — older Large phantoms have three resolution arrays
     # (1.1, 1.0, 0.9); newer Large phantoms add a fourth at 0.8 mm. We default
     # to the four-array set since it matches current ACR production phantoms;
@@ -116,21 +117,23 @@ LARGE = PhantomSpec(
     # § Table 4 — Large PIU ROI areas and thresholds
     piu_large_roi_area_cm2=200.0,           # 195–205 cm² band, nominal 200
     piu_small_roi_area_cm2=1.0,
-    piu_threshold_lowfield_percent=87.5,    # < 3 T
-    piu_threshold_3t_percent=82.0,          # 3 T (lower because of dielectric effects)
+    piu_target_lowfield_percent=87.5,       # < 3 T advisory target
+    piu_target_3t_percent=82.0,             # 3 T advisory target
+    piu_failure_lowfield_percent=85.0,      # < 3 T failure boundary
+    piu_failure_3t_percent=80.0,            # 3 T failure boundary
     # § Table 4 + § 6.2 — Large ghosting reuses the same large ROI as PIU
     ghosting_large_roi_area_cm2=200.0,
     # § 6.2 — 10 cm² air ROIs with ~4:1 aspect ratio
-    ghosting_air_roi_long_mm=40.0,
-    ghosting_air_roi_short_mm=10.0,
-    ghosting_air_offset_mm=12.0,
+    ghosting_air_roi_area_cm2=10.0,
+    ghosting_air_roi_aspect_ratio=4.0,
     # § 6.4 — PSG limit is 3.0 % for both phantoms
     ghosting_threshold_percent=3.0,
     # § Table 5 — Large LCD limits (total spokes across slices 8–11)
     lcd_slices=(8, 9, 10, 11),
     lcd_threshold_3t=37,            # ≥ 37 total spokes at 3 T (T1 & T2 the same)
-    lcd_threshold_lowfield_t1=30,   # ≥ 30 total spokes at 1.5 T for ACR-T1
-    lcd_threshold_lowfield_t2=25,   # ≥ 25 total spokes at 1.5 T for ACR-T2
+    lcd_threshold_midfield_t1=30,   # ≥ 30 total spokes at 1.5–<3 T for ACR-T1
+    lcd_threshold_midfield_t2=25,   # ≥ 25 total spokes at 1.5–<3 T for ACR-T2
+    lcd_threshold_sub_1_5t=7,
     # The spoke pattern fits within roughly a 60 mm diameter; 35 mm half-width
     # gives the spokes plus a little surrounding context for orientation.
     lcd_insert_half_width_mm=55.0,
@@ -157,31 +160,38 @@ MEDIUM = PhantomSpec(
     slice_role_indices={1: 0, 5: 4, 7: 6, 8: 7, 9: 8, 10: 9, 11: 10},
     # § 3.4 — slice thickness limits are identical between Large and Medium
     nominal_slice_thickness_mm=5.0,
-    slice_thickness_tolerance_mm=0.7,
+    slice_thickness_target_tolerance_mm=0.7,
+    slice_thickness_failure_tolerance_mm=1.0,
     # § 4.4 — slice position limits are identical between Large and Medium
-    bar_diff_tolerance_mm=5.0,
+    bar_diff_preferred_mm=5.0,
+    bar_diff_failure_mm=7.0,
     # § Table 1 + § 2.2 — Medium phantom has four resolution arrays
     resolution_array_sizes_mm=(1.1, 1.0, 0.9, 0.8),
     # § 2.4 — required minimum resolution is 1.0 mm for both phantoms
     resolution_pass_threshold_mm=1.0,
-    # § Table 4 — Medium PIU ROI areas and thresholds
+    # § Table 4 — Medium PIU ROI areas and thresholds.
+    # Medium has a single hard limit (no advisory band), so target and
+    # failure are intentionally identical; the warning band in
+    # uniformity.run() is dead code for MEDIUM by design.
     piu_large_roi_area_cm2=160.0,           # 155–165 cm² band, nominal 160
     piu_small_roi_area_cm2=1.0,
-    piu_threshold_lowfield_percent=90.0,    # < 3 T
-    piu_threshold_3t_percent=85.0,          # 3 T
+    piu_target_lowfield_percent=90.0,       # < 3 T hard limit
+    piu_target_3t_percent=85.0,             # 3 T hard limit
+    piu_failure_lowfield_percent=90.0,      # no soft band — failure == target
+    piu_failure_3t_percent=85.0,            # no soft band — failure == target
     # § Table 4 + § 6.2 — Medium ghosting reuses the same large ROI as PIU
     ghosting_large_roi_area_cm2=160.0,
     # § 6.2 — 10 cm² air ROIs with ~4:1 aspect ratio; same as Large
-    ghosting_air_roi_long_mm=40.0,
-    ghosting_air_roi_short_mm=10.0,
-    ghosting_air_offset_mm=12.0,
+    ghosting_air_roi_area_cm2=10.0,
+    ghosting_air_roi_aspect_ratio=4.0,
     # § 6.4 — Medium PSG limit is 3.0 %, identical to Large
     ghosting_threshold_percent=3.0,
     # § Table 5 — Medium LCD limits
     lcd_slices=(8, 9, 10, 11),
     lcd_threshold_3t=37,            # ≥ 37 total spokes at 3 T (T1 & T2 the same)
-    lcd_threshold_lowfield_t1=30,   # ≥ 30 total spokes at 1.5 T for ACR-T1
-    lcd_threshold_lowfield_t2=25,   # ≥ 25 total spokes at 1.5 T for ACR-T2
+    lcd_threshold_midfield_t1=30,   # ≥ 30 total spokes at 1.5–<3 T for ACR-T1
+    lcd_threshold_midfield_t2=25,   # ≥ 25 total spokes at 1.5–<3 T for ACR-T2
+    lcd_threshold_sub_1_5t=7,
     # The LCD insert is the same physical size as in the Large phantom.
     lcd_insert_half_width_mm=55.0,
 )
@@ -196,3 +206,20 @@ PHANTOMS: dict[str, PhantomSpec] = {
 def default_phantom() -> PhantomSpec:
     """Spec assumed when nothing is selected. Today that's the Large phantom."""
     return LARGE
+
+
+# ACR Table 4/5 bands are written as exact edges (1.5, 3.0 T) but DICOM
+# MagneticFieldStrength is often vendor-rounded (e.g. 2.89 / 2.95 T for a
+# nominal 3 T scanner). Treat values within this tolerance of a band edge
+# as belonging to the higher band.
+FIELD_BAND_EPSILON_T = 0.05
+
+
+def is_high_field(field_strength_t: float) -> bool:
+    """Return True if the scanner should be treated as ≥3 T per ACR bands."""
+    return field_strength_t >= 3.0 - FIELD_BAND_EPSILON_T
+
+
+def is_low_field(field_strength_t: float) -> bool:
+    """Return True if the scanner should be treated as <1.5 T per ACR bands."""
+    return field_strength_t < 1.5 - FIELD_BAND_EPSILON_T

@@ -224,11 +224,20 @@ def run(
     spec: PhantomSpec | None = None,
     user_input: dict | None = None,
 ) -> TestResult:
-    """`user_input` is a dict like {'UL': 1.0, 'LR': 0.9, 'spec': 1.0}.
+    """`user_input` is a dict like {'UL': 1.0, 'LR': 0.9}.
 
     If `user_input` is None the test runs in "needs review" mode and
     returns the zoomed insert images for the technologist to inspect.
+
+    The pass threshold is fixed by ACR (``spec.resolution_pass_threshold_mm``)
+    and is not caller-overridable; passing a ``"spec"`` key in ``user_input``
+    is a programming error and raises ``ValueError``.
     """
+    if user_input is not None and "spec" in user_input:
+        raise ValueError(
+            "high_contrast_resolution.run(): user_input must not contain a "
+            "'spec' key — the pass threshold is fixed by the phantom spec."
+        )
     spec = spec or series.spec
     res = TestResult(
         test_id="high_contrast_resolution",
@@ -285,7 +294,7 @@ def run(
         ))
 
         if user_input:
-            threshold = float(user_input.get("spec", spec.resolution_pass_threshold_mm))
+            threshold = spec.resolution_pass_threshold_mm
             ul = user_input.get("UL")
             lr = user_input.get("LR")
             def _mark(label, val):

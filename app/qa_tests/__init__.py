@@ -42,18 +42,33 @@ class TestSpec:
     id: str
     label: str
     runner: ModuleType
+    axial_sequences: frozenset[str] | None = None
 
 
 AXIAL_TEST_ORDER: list[TestSpec] = [
-    TestSpec("geometric_accuracy", "Geometric Accuracy", geometric_accuracy),
-    TestSpec("high_contrast_resolution", "High-Contrast Spatial Resolution", high_contrast_resolution),
-    TestSpec("slice_thickness", "Slice Thickness Accuracy", slice_thickness),
-    TestSpec("slice_position", "Slice Position Accuracy", slice_position),
-    TestSpec("uniformity", "Image Intensity Uniformity (PIU)", uniformity),
-    TestSpec("ghosting", "Percent Signal Ghosting (PSG)", ghosting),
-    TestSpec("low_contrast_detectability", "Low-Contrast Object Detectability", low_contrast_detectability),
+    TestSpec("geometric_accuracy", "Geometric Accuracy", geometric_accuracy, frozenset({"T1"})),
+    TestSpec("high_contrast_resolution", "High-Contrast Spatial Resolution", high_contrast_resolution, frozenset({"T1", "T2"})),
+    TestSpec("slice_thickness", "Slice Thickness Accuracy", slice_thickness, frozenset({"T1", "T2"})),
+    TestSpec("slice_position", "Slice Position Accuracy", slice_position, frozenset({"T1", "T2"})),
+    TestSpec("uniformity", "Image Intensity Uniformity (PIU)", uniformity, frozenset({"T1", "T2"})),
+    TestSpec("ghosting", "Percent Signal Ghosting (PSG)", ghosting, frozenset({"T1"})),
+    TestSpec("low_contrast_detectability", "Low-Contrast Object Detectability", low_contrast_detectability, frozenset({"T1", "T2"})),
 ]
 
 SAGITTAL_TEST_ORDER: list[TestSpec] = [
     TestSpec("localizer_geometric_accuracy", "Geometric Accuracy — Sagittal Localizer", localizer_geometry),
 ]
+
+
+def applicable_test_order(
+    test_order: list[TestSpec],
+    analysis_mode: AnalysisMode,
+    sequence: str,
+) -> list[TestSpec]:
+    """Return tests applicable to the selected single-series analysis."""
+    if analysis_mode != "axial":
+        return list(test_order)
+    return [
+        test for test in test_order
+        if test.axial_sequences is None or sequence in test.axial_sequences
+    ]

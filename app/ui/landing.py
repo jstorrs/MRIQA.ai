@@ -28,15 +28,15 @@ def render() -> None:
         st.markdown("### 2. Pick a series")
         st.markdown(
             "The app picks the analysis from the series you choose:"
-            " **11-slice axial** runs the full ACR protocol; a"
+            " an **11-slice axial** series runs its applicable ACR tests; a"
             " **single sagittal image** runs the S-I length check."
         )
     with c3:
         st.markdown("### 3. Run + Report")
         st.markdown(
-            "Axial runs five automated tests (Analysis tab) and, on a "
+            "Axial runs the automated tests applicable to the selected T1/T2 series and, on a "
             "separate **Manual scoring** tab, two visual tests. Sagittal runs "
-            "one automated test. Export a PDF + CSV when done."
+            "one automated test. Reports are per-series, not combined accreditation verdicts."
         )
 
     st.divider()

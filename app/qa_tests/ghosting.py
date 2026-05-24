@@ -4,8 +4,8 @@ Procedure
 ---------
 * Use slice 7 (same image as PIU).
 * Place a large circular ROI (~200 cm²) inside the phantom — same as PIU.
-* Place four thin rectangular ROIs in air, just outside the phantom:
-  top, bottom, left, right. Each ~1 cm × 4 cm (10 cm² each), oriented so
+* Place four thin elliptical ROIs in air outside the phantom:
+  top, bottom, left, right. Each ~10 cm² with a 4:1 aspect ratio, oriented so
   the long axis is parallel to the nearest phantom edge.
 * PSG = | ((top + bottom) − (left + right)) / (2 × large) |
 * Action limit: PSG ≤ 0.030 (i.e. 3.0 %), reported as a fraction or
@@ -14,8 +14,10 @@ Procedure
 Implementation
 --------------
 ROIs are sized in mm from PixelSpacing. The four air ROIs are centered
-~10 mm outside the phantom radius along each cardinal direction. We
-guard against the ROI falling off the image.
+between the phantom boundary and the FOV boundary along each cardinal
+direction, with a small mandatory gap between the ROI's inner edge and
+the phantom rim so partial-volume signal doesn't bleed in. We reject a
+measurement when the prescribed ROI plus that gap cannot fit.
 """
 
 from __future__ import annotations
@@ -25,7 +27,8 @@ from matplotlib.patches import Circle, Ellipse
 
 from ..io_dicom.dicom_loader import DicomSeries
 from ..utils.geometry import (
-    circular_roi_mask, elliptical_roi_mask, radius_px_for_area_cm2,
+    circular_roi_mask, ellipse_axes_for_area_cm2, elliptical_roi_mask,
+    radius_px_for_area_cm2,
 )
 from ..utils.phantom import localize_phantom, phantom_quality_warnings
 from ..utils.phantom_spec import PhantomSpec
@@ -63,12 +66,63 @@ def _mm_to_px(mm: float, spacing_mm: float) -> float:
     return mm / spacing_mm
 
 
+_MIN_PHANTOM_GAP_MM = 5.0
+
+
+def _air_rois(
+    shape: tuple[int, int],
+    geom,
+    ps: tuple[float, float],
+    area_cm2: float,
+    aspect_ratio: float,
+    min_gap_mm: float = _MIN_PHANTOM_GAP_MM,
+) -> dict[str, tuple[float, float, float, float]]:
+    long_mm, short_mm = ellipse_axes_for_area_cm2(area_cm2, aspect_ratio)
+    long_row = _mm_to_px(long_mm / 2.0, ps[0])
+    long_col = _mm_to_px(long_mm / 2.0, ps[1])
+    short_row = _mm_to_px(short_mm / 2.0, ps[0])
+    short_col = _mm_to_px(short_mm / 2.0, ps[1])
+    gap_row = _mm_to_px(min_gap_mm, ps[0])
+    gap_col = _mm_to_px(min_gap_mm, ps[1])
+    height, width = shape
+
+    def midpoint(lo: float, hi: float, name: str) -> float:
+        if hi < lo:
+            raise ValueError(
+                f"Air ROI '{name}' cannot fit between the phantom and FOV edge "
+                f"(needs ≥{min_gap_mm:.0f} mm clearance); check FOV."
+            )
+        return (lo + hi) / 2.0
+
+    horizontal_center = min(max(geom.cx_px, long_col), width - 1 - long_col)
+    vertical_center = min(max(geom.cy_px, long_row), height - 1 - long_row)
+    return {
+        "top": (
+            midpoint(short_row, geom.cy_px - geom.radius_px - short_row - gap_row, "top"),
+            horizontal_center, short_row, long_col,
+        ),
+        "bottom": (
+            midpoint(geom.cy_px + geom.radius_px + short_row + gap_row, height - 1 - short_row, "bottom"),
+            horizontal_center, short_row, long_col,
+        ),
+        "left": (
+            vertical_center,
+            midpoint(short_col, geom.cx_px - geom.radius_px - short_col - gap_col, "left"),
+            long_row, short_col,
+        ),
+        "right": (
+            vertical_center,
+            midpoint(geom.cx_px + geom.radius_px + short_col + gap_col, width - 1 - short_col, "right"),
+            long_row, short_col,
+        ),
+    }
+
+
 def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
     spec = spec or series.spec
     large_area = spec.ghosting_large_roi_area_cm2
-    air_long_mm = spec.ghosting_air_roi_long_mm
-    air_short_mm = spec.ghosting_air_roi_short_mm
-    air_offset_mm = spec.ghosting_air_offset_mm
+    air_area = spec.ghosting_air_roi_area_cm2
+    air_aspect = spec.ghosting_air_roi_aspect_ratio
     psg_threshold = spec.ghosting_threshold_percent
     res = TestResult(
         test_id="ghosting",
@@ -85,29 +139,18 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
 
         # Large ROI
         r_large = radius_px_for_area_cm2(large_area, ps)
-        r_large = min(r_large, geom.radius_px * 0.85)
+        if r_large > geom.radius_px * 0.95:
+            res.add_warning(
+                f"Prescribed large ROI radius ({r_large:.1f} px) is close to or "
+                f"exceeds the detected phantom radius ({geom.radius_px:.1f} px); "
+                "the ROI may include non-phantom signal and depress the PSG denominator. "
+                "Check the overlay.",
+                severity="medium",
+            )
         large_mask = circular_roi_mask(img.shape, geom.cy_px, geom.cx_px, r_large)
         s_large = float(img[large_mask].mean())
 
-        # Air ROIs — semi-axes in px
-        long_px_row = _mm_to_px(air_long_mm / 2.0, ps[0])
-        long_px_col = _mm_to_px(air_long_mm / 2.0, ps[1])
-        short_px_row = _mm_to_px(air_short_mm / 2.0, ps[0])
-        short_px_col = _mm_to_px(air_short_mm / 2.0, ps[1])
-
-        # geom.radius_px is a single scalar; for non-square pixels it conflates
-        # the row- and column-axis radii. Acceptable for ACR phantom datasets
-        # (PixelSpacing is square) but worth knowing if non-square data shows up.
-        offset_row = geom.radius_px + _mm_to_px(air_offset_mm, ps[0])
-        offset_col = geom.radius_px + _mm_to_px(air_offset_mm, ps[1])
-
-        # Top (above): long axis horizontal -> wider in x (col), short in y (row)
-        rois = {
-            "top":    (geom.cy_px - offset_row, geom.cx_px,           short_px_row, long_px_col),
-            "bottom": (geom.cy_px + offset_row, geom.cx_px,           short_px_row, long_px_col),
-            "left":   (geom.cy_px,              geom.cx_px - offset_col, long_px_row, short_px_col),
-            "right":  (geom.cy_px,              geom.cx_px + offset_col, long_px_row, short_px_col),
-        }
+        rois = _air_rois(img.shape, geom, ps, air_area, air_aspect)
 
         means: dict[str, float] = {}
         masks: dict[str, np.ndarray] = {}

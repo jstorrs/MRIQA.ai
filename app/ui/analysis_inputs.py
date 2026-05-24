@@ -53,7 +53,6 @@ def render(
     )
     detected_phantom = spec_auto.short_name
     b0 = series.metadata.field_strength_t
-    detected_field = "3.0 T" if b0 >= 2.0 else "1.5 T"
     detected_sequence = detect_sequence_type(
         series.metadata.repetition_time_ms, series.metadata.echo_time_ms,
     )
@@ -61,7 +60,6 @@ def render(
     phantom_options_pairs = [(s.short_name, s.name) for s in PHANTOMS.values()]
     phantom_options = [opt[0] for opt in phantom_options_pairs]
     phantom_label = dict(phantom_options_pairs)
-    field_options = ["1.5 T", "3.0 T"]
     sequence_options = ["T1", "T2"]
 
     cols = st.columns(3 if show_sequence else 2)
@@ -76,13 +74,16 @@ def render(
                  "Large = 190 mm Ø / 148 mm S-I; Medium = 165 mm Ø / 134 mm S-I.",
         )
     with cols[1]:
-        fld = st.selectbox(
-            "Scanner field strength",
-            options=field_options,
-            index=field_options.index(detected_field),
+        fld = st.number_input(
+            "Scanner field strength (T)",
+            min_value=0.0,
+            max_value=10.0,
+            value=float(b0),
+            step=0.1,
+            format="%.2f",
             key=f"{key_prefix}_field_{series_tag}",
-            help="Pre-selected from the DICOM MagneticFieldStrength tag "
-                 "(snapped to the nearest of 1.5 / 3.0 T).",
+            help="Pre-selected from the DICOM MagneticFieldStrength tag. "
+                 "LCD thresholds use <1.5 T, 1.5–<3 T, and ≥3 T bands.",
         )
     if show_sequence:
         with cols[2]:
@@ -97,5 +98,15 @@ def render(
             )
         series.metadata.sequence = seq
 
+    sequence = seq if show_sequence else series.metadata.sequence
+    config = (choice, float(fld), sequence)
+    config_key = f"_analysis_config_{key_prefix}_{series_tag}"
+    previous = st.session_state.get(config_key)
+    if previous is not None and previous != config and st.session_state.results:
+        st.session_state.results = {}
+        st.session_state.pop("_visual_hcr_cache", None)
+        st.session_state.pop("_visual_lcd_cache", None)
+        st.info("Analysis inputs changed; prior results were cleared.")
+    st.session_state[config_key] = config
     series.spec = PHANTOMS.get(choice, LARGE)
-    series.metadata.field_strength_t = 1.5 if fld == "1.5 T" else 3.0
+    series.metadata.field_strength_t = float(fld)

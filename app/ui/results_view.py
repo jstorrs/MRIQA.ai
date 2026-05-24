@@ -13,7 +13,7 @@ import logging
 import streamlit as st
 
 from ..io_dicom.dicom_loader import DicomSeries
-from ..qa_tests import AnalysisMode, TestSpec
+from ..qa_tests import AnalysisMode, TestSpec, applicable_test_order
 from ..qa_tests.base import TestResult, verdict_of
 from .badges import confidence_badge, status_badge
 from .banner import banner
@@ -33,12 +33,15 @@ _VERDICT_CSS_CLASS = {
 
 
 def run_automated_tests(
-    series: DicomSeries, test_order: list[TestSpec],
+    series: DicomSeries, test_order: list[TestSpec], analysis_mode: AnalysisMode,
 ) -> dict[str, TestResult]:
     """Run every non-visual test in test_order. Returns a dict ready to
     merge into st.session_state.results."""
     out: dict[str, TestResult] = {}
-    automated = [t for t in test_order if t.id not in VISUAL_TEST_IDS]
+    automated = [
+        t for t in applicable_test_order(test_order, analysis_mode, series.metadata.sequence)
+        if t.id not in VISUAL_TEST_IDS
+    ]
     prog = st.progress(0, text="Running automated tests...")
     for i, t in enumerate(automated):
         prog.progress(
@@ -112,12 +115,13 @@ def render(
     save-to-history button only renders for ``scope="all"`` to keep the
     primary "I'm done" action on Results.
     """
+    applicable_order = applicable_test_order(test_order, analysis_mode, series.metadata.sequence)
     if scope == "automated":
-        displayed_order = [t for t in test_order if t.id not in VISUAL_TEST_IDS]
+        displayed_order = [t for t in applicable_order if t.id not in VISUAL_TEST_IDS]
     elif scope == "manual":
-        displayed_order = [t for t in test_order if t.id in VISUAL_TEST_IDS]
+        displayed_order = [t for t in applicable_order if t.id in VISUAL_TEST_IDS]
     else:
-        displayed_order = list(test_order)
+        displayed_order = applicable_order
 
     displayed_ids = {t.id for t in displayed_order}
     displayed_results = {
@@ -126,6 +130,11 @@ def render(
     }
 
     _pending_visual_nudge(analysis_mode, scope)
+    if analysis_mode == "axial":
+        st.caption(
+            f"Verdict applies to the selected ACR {series.metadata.sequence} series only; "
+            "it is not a combined accreditation determination."
+        )
 
     verdict, counts = verdict_of(displayed_results.values())
     banner(

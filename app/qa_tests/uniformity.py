@@ -10,15 +10,15 @@ Procedure
   with the highest mean signal and the small ROI with the lowest mean
   signal.
 * PIU = 100 × (1 − (high − low) / (high + low)).
-* Action limits (Large phantom, per § 5.4 / Table 4):
-    - ≥ 87.5 % at < 3 T
-    - ≥ 82.0 % at 3 T   (lower because of dielectric/conductivity effects)
+* Limits (Large phantom, per § 5.4 / Table 4):
+    - target ≥ 87.5 %, fail below 85.0 % at < 3 T
+    - target ≥ 82.0 %, fail below 80.0 % at 3 T
   Medium phantom is tighter (≥ 90 % at < 3 T, ≥ 85 % at 3 T).
 
 Implementation
 --------------
 We rasterize a candidate-centers grid inside the large ROI and compute
-the small-ROI mean using `scipy.ndimage.uniform_filter`, which gives the
+the small-ROI mean using a circular convolution kernel, which gives the
 mean of every possible small ROI in one pass. Then we mask to candidate
 centers and take min/max.
 """
@@ -29,12 +29,12 @@ import math
 
 import numpy as np
 from matplotlib.patches import Circle
-from scipy.ndimage import uniform_filter
+from scipy.ndimage import convolve
 
 from ..io_dicom.dicom_loader import DicomSeries
 from ..utils.geometry import circular_roi_mask, radius_px_for_area_cm2
 from ..utils.phantom import localize_phantom, phantom_quality_warnings
-from ..utils.phantom_spec import PhantomSpec
+from ..utils.phantom_spec import PhantomSpec, is_high_field
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
 
@@ -71,7 +71,7 @@ def _draw_uniformity(
 def _candidate_centers(
     img: np.ndarray,
     candidate_mask: np.ndarray,
-    box_size: int,
+    kernel: np.ndarray,
     r_small: float,
     large_mask: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, int]:
@@ -86,7 +86,7 @@ def _candidate_centers(
     """
     med = float(np.median(img[large_mask]))
     air = (img < 0.5 * med).astype(np.float32)
-    air_frac = uniform_filter(air, size=box_size)
+    air_frac = convolve(air, kernel, mode="constant", cval=1.0) / kernel.sum()
 
     margin = int(math.ceil(r_small))
     ys, xs = np.where(candidate_mask)
@@ -103,12 +103,20 @@ def _candidate_centers(
     return ys, xs, n_excluded
 
 
+def _circular_kernel(radius_px: float) -> np.ndarray:
+    margin = int(math.ceil(radius_px))
+    diameter = 2 * margin + 1
+    return circular_roi_mask((diameter, diameter), margin, margin, radius_px).astype(np.float32)
+
+
 def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
     spec = spec or series.spec
     large_area = spec.piu_large_roi_area_cm2
     small_area = spec.piu_small_roi_area_cm2
-    threshold_3t = spec.piu_threshold_3t_percent
-    threshold_lo = spec.piu_threshold_lowfield_percent
+    target_3t = spec.piu_target_3t_percent
+    target_lo = spec.piu_target_lowfield_percent
+    failure_3t = spec.piu_failure_3t_percent
+    failure_lo = spec.piu_failure_lowfield_percent
     res = TestResult(
         test_id="uniformity",
         test_name="Image Intensity Uniformity (PIU)",
@@ -123,9 +131,18 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
             res.add_warning(w, severity="medium")
 
         r_large = radius_px_for_area_cm2(large_area, ps)
-        # Don't let the large ROI exceed the phantom interior
-        r_large = min(r_large, geom.radius_px * 0.85)
         r_small = radius_px_for_area_cm2(small_area, ps)
+
+        # The prescribed ROI area is fixed by ACR; we don't clamp it to the
+        # detected phantom radius. If the detector underestimates the phantom,
+        # the ROI can extend past the interior and bias PIU — warn instead.
+        if r_large > geom.radius_px * 0.95:
+            res.add_warning(
+                f"Prescribed large ROI radius ({r_large:.1f} px) is close to or "
+                f"exceeds the detected phantom radius ({geom.radius_px:.1f} px); "
+                "the ROI may include non-phantom signal. Check the overlay.",
+                severity="medium",
+            )
 
         large_mask = circular_roi_mask(img.shape, geom.cy_px, geom.cx_px, r_large)
         # The ACR procedure requires the small 1 cm² ROI to be placed *inside*
@@ -135,16 +152,12 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         candidate_mask = circular_roi_mask(
             img.shape, geom.cy_px, geom.cx_px, max(1.0, r_large - r_small - 0.5),
         )
-        # Mean of the small ROI at every center pixel: a uniform circular filter.
-        # We approximate the circular small-ROI mean with a square box of equal area.
-        # This is the standard interpretation used by many ACR analysers.
-        # Ceil rather than round so the box doesn't shrink below the requested
-        # small-ROI area when 2*r_small has a fractional part.
-        box_size = max(3, int(math.ceil(2 * r_small)))
-        small_mean = uniform_filter(img, size=box_size)
+        # Mean of the prescribed circular small ROI at every possible center.
+        kernel = _circular_kernel(r_small)
+        small_mean = convolve(img, kernel, mode="constant", cval=0.0) / kernel.sum()
 
         ys, xs, n_excluded = _candidate_centers(
-            img, candidate_mask, box_size, r_small, large_mask,
+            img, candidate_mask, kernel, r_small, large_mask,
         )
         if n_excluded > 20:
             res.add_warning(
@@ -164,15 +177,16 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
 
         piu = 100.0 * (1.0 - (s_high - s_low) / (s_high + s_low + 1e-9))
 
-        is_3t = series.metadata.field_strength_t >= 3.0 - 0.05
-        threshold = threshold_3t if is_3t else threshold_lo
+        is_3t = is_high_field(series.metadata.field_strength_t)
+        target = target_3t if is_3t else target_lo
+        failure = failure_3t if is_3t else failure_lo
 
         m = Measurement(
             label="PIU",
             value=round(piu, 2),
             unit="%",
-            spec=f"≥ {threshold:.1f} % (B0 = {series.metadata.field_strength_t:.1f} T)",
-            passed=piu >= threshold,
+            spec=f"fail if < {failure:.1f} %; target ≥ {target:.1f} % (B0 = {series.metadata.field_strength_t:.2f} T)",
+            passed=piu >= failure,
         )
         res.measurements.append(m)
         res.passed = bool(m.passed)
@@ -180,6 +194,12 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
             f"Large ROI area ≈ {large_area:.0f} cm² (radius={r_large*((ps[0]+ps[1])/2):.1f} mm). "
             f"Small ROI ≈ {small_area:.0f} cm². High mean = {s_high:.1f}, Low mean = {s_low:.1f}."
         )
+        if failure <= piu < target:
+            res.add_warning(
+                f"PIU = {piu:.2f}% is below the preferred ≥ {target:.1f}% target "
+                f"but above the ACR failure boundary of {failure:.1f}%.",
+                severity="medium",
+            )
 
         # --- Detection-quality heuristics ---
         if piu < 50 or piu > 100:
