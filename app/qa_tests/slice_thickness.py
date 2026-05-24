@@ -32,6 +32,8 @@ bright phantom edges / small end bars) and produced implausible values.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import numpy as np
 
 from ..io_dicom.dicom_loader import DicomSeries
@@ -42,26 +44,41 @@ from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
 
 
+class RampFit(NamedTuple):
+    """FWHM and sub-pixel left/right edges for one bright signal ramp."""
+    fwhm_px: float
+    left_x: float | None
+    right_x: float | None
+
+
+class SliceThicknessFit(NamedTuple):
+    """Upper- and lower-ramp FWHM in mm, plus annotation positions."""
+    top_mm: float
+    bot_mm: float
+    upper: RampFit
+    lower: RampFit
+
+
 def _smooth(p: np.ndarray, n: int = 3) -> np.ndarray:
     return np.convolve(p.astype(float), np.ones(n) / n, mode="same")
 
 
-def _fwhm_with_pos(profile: np.ndarray, x0: int):
+def _fwhm_with_pos(profile: np.ndarray, x0: int) -> RampFit:
     """FWHM (px) of a bright ramp over a void baseline, plus the sub-pixel
     left/right column positions for annotation."""
     p = _smooth(profile, 3)
     base = np.percentile(p, 5)        # void floor
     peak = p.max()
     if peak - base < 1e-6:
-        return 0.0, None, None
+        return RampFit(0.0, None, None)
     half = base + 0.5 * (peak - base)
     above = np.where(p >= half)[0]
     if above.size < 2:
-        return 0.0, None, None
+        return RampFit(0.0, None, None)
     lo, hi = above[0], above[-1]
     lf = lo - 1 + (half - p[lo - 1]) / (p[lo] - p[lo - 1] + 1e-9) if lo > 0 else float(lo)
     rf = hi + (half - p[hi]) / (p[hi + 1] - p[hi] + 1e-9) if hi < len(p) - 1 else float(hi)
-    return rf - lf, x0 + lf, x0 + rf
+    return RampFit(rf - lf, x0 + lf, x0 + rf)
 
 
 def _find_void_band(img: np.ndarray, cx: float, cy: float, radius_px: float) -> tuple[int, int]:
@@ -114,24 +131,22 @@ def _draw_slice_thickness(
     band_top: int,
     band_bot: int,
     septum: int,
-    top_mm: float,
-    bot_mm: float,
+    fit: SliceThicknessFit,
     thickness_mm: float,
-    u_l, u_r, l_l, l_r,
     zoom: bool = True,
 ) -> None:
     up_row = (band_top + septum) // 2
     lo_row = (septum + 1 + band_bot) // 2
-    if u_l is not None:
-        ax.plot([u_l, u_r], [up_row, up_row], color="cyan", lw=2)
+    if fit.upper.left_x is not None:
+        ax.plot([fit.upper.left_x, fit.upper.right_x], [up_row, up_row], color="cyan", lw=2)
         ax.annotate(
-            f"top {top_mm:.1f} mm", (u_r, up_row), color="cyan",
+            f"top {fit.top_mm:.1f} mm", (fit.upper.right_x, up_row), color="cyan",
             fontsize=8, va="center", xytext=(5, -6), textcoords="offset points",
         )
-    if l_l is not None:
-        ax.plot([l_l, l_r], [lo_row, lo_row], color="magenta", lw=2)
+    if fit.lower.left_x is not None:
+        ax.plot([fit.lower.left_x, fit.lower.right_x], [lo_row, lo_row], color="magenta", lw=2)
         ax.annotate(
-            f"bot {bot_mm:.1f} mm", (l_r, lo_row), color="magenta",
+            f"bot {fit.bot_mm:.1f} mm", (fit.lower.right_x, lo_row), color="magenta",
             fontsize=8, va="center", xytext=(5, 6), textcoords="offset points",
         )
     ax.set_title(f"Slice 1 — slice thickness {thickness_mm:.2f} mm", fontsize=10)
@@ -149,20 +164,18 @@ def _measure_ramp_fwhms(
     cx: float,
     radius_px: float,
     col_spacing_mm: float,
-) -> tuple[float, float, tuple]:
-    """Measure the FWHM of the upper and lower bright ramps inside the
-    insert. Returns ``(top_mm, bot_mm, annotation)`` where ``annotation`` is
-    ``(u_l, u_r, l_l, l_r)`` sub-pixel x positions for the overlay."""
+) -> SliceThicknessFit:
+    """Measure the FWHM of the upper and lower bright ramps inside the insert."""
     x0, x1 = int(cx - 0.55 * radius_px), int(cx + 0.55 * radius_px)
     up_prof = img[band_top:septum, x0:x1].mean(axis=0)
     lo_prof = img[septum + 1:band_bot + 1, x0:x1].mean(axis=0)
-    fu, u_l, u_r = _fwhm_with_pos(up_prof, x0)
-    fl, l_l, l_r = _fwhm_with_pos(lo_prof, x0)
-    top_mm = fu * col_spacing_mm
-    bot_mm = fl * col_spacing_mm
+    upper = _fwhm_with_pos(up_prof, x0)
+    lower = _fwhm_with_pos(lo_prof, x0)
+    top_mm = upper.fwhm_px * col_spacing_mm
+    bot_mm = lower.fwhm_px * col_spacing_mm
     if top_mm + bot_mm < 1e-6:
         raise ValueError("Failed to fit ramp FWHM in the slice-thickness insert.")
-    return top_mm, bot_mm, (u_l, u_r, l_l, l_r)
+    return SliceThicknessFit(top_mm, bot_mm, upper, lower)
 
 
 def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
@@ -184,9 +197,10 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
 
         band_top, band_bot = _find_void_band(img, cx, cy, radius_px)
         septum = _find_septum(img, band_top, band_bot, cx, radius_px)
-        top_mm, bot_mm, (u_l, u_r, l_l, l_r) = _measure_ramp_fwhms(
+        fit = _measure_ramp_fwhms(
             img, band_top, septum, band_bot, cx, radius_px, ps[1],
         )
+        top_mm, bot_mm = fit.top_mm, fit.bot_mm
 
         thickness_mm = 0.2 * (top_mm * bot_mm) / (top_mm + bot_mm)
 
@@ -222,8 +236,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                     ax,
                     cx=cx, radius_px=radius_px,
                     band_top=band_top, band_bot=band_bot, septum=septum,
-                    top_mm=top_mm, bot_mm=bot_mm, thickness_mm=thickness_mm,
-                    u_l=u_l, u_r=u_r, l_l=l_l, l_r=l_r,
+                    fit=fit, thickness_mm=thickness_mm,
                 ),
                 figsize=(8.0, 3.0),
             ),

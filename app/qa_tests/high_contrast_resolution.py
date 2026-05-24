@@ -20,6 +20,8 @@ test result.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import numpy as np
 
 from ..io_dicom.dicom_loader import DicomSeries
@@ -28,6 +30,14 @@ from ..utils.phantom import localize_phantom
 from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
+
+
+class ResolutionBBox(NamedTuple):
+    """Image-coordinate bbox of the resolution-grid insert."""
+    y0: int
+    y1: int
+    x0: int
+    x1: int
 
 
 def _draw_hcr_title(ax, sizes_label: str) -> None:
@@ -39,7 +49,7 @@ def _draw_hcr_title(ax, sizes_label: str) -> None:
 
 def crop_resolution_insert(
     image: np.ndarray, geom, corner: str,
-) -> tuple[np.ndarray, tuple[int, int, int, int]]:
+) -> tuple[np.ndarray, ResolutionBBox]:
     """Return ``(crop, bbox)`` for a zoomed view of the UL or LR resolution
     insert. ``bbox`` is ``(y0, y1, x0, x1)`` in image coordinates.
 
@@ -51,22 +61,23 @@ def crop_resolution_insert(
     if bb is None:
         # Geometric fallback relative to the phantom centre.
         cy, cx, r = geom.cy_px, geom.cx_px, geom.radius_px
-        bb = (int(cy + 0.34 * r), int(cy + 0.58 * r),
-              int(cx - 0.28 * r), int(cx + 0.70 * r))
+        bb = ResolutionBBox(
+            int(cy + 0.34 * r), int(cy + 0.58 * r),
+            int(cx - 0.28 * r), int(cx + 0.70 * r),
+        )
 
-    r0, r1, c0, c1 = bb
-    h = r1 - r0
+    h = bb.y1 - bb.y0
     cl = corner.lower()
     if cl == "ul":          # upper blocks (vertical-hole arrays)
-        y0, y1 = r0 - 5, r0 + int(0.62 * h) + 3
+        y0, y1 = bb.y0 - 5, bb.y0 + int(0.62 * h) + 3
     elif cl == "lr":        # lower blocks (horizontal-hole arrays)
-        y0, y1 = r0 + int(0.30 * h) - 1, r1 + 6
+        y0, y1 = bb.y0 + int(0.30 * h) - 1, bb.y1 + 6
     else:                   # 'full' — the whole insert
-        y0, y1 = r0 - 5, r1 + 6
-    x0, x1 = c0 - 4, c1 + 5
+        y0, y1 = bb.y0 - 5, bb.y1 + 6
+    x0, x1 = bb.x0 - 4, bb.x1 + 5
     y0, y1 = max(0, y0), min(H, y1)
     x0, x1 = max(0, x0), min(W, x1)
-    return image[y0:y1, x0:x1], (y0, y1, x0, x1)
+    return image[y0:y1, x0:x1], ResolutionBBox(y0, y1, x0, x1)
 
 
 def _cluster_runs(active, min_gap_for_split):
@@ -89,7 +100,9 @@ def _cluster_runs(active, min_gap_for_split):
     return merged
 
 
-def _detect_resolution_grids(image, geom):
+def _detect_resolution_grids(
+    image, geom,
+) -> tuple[ResolutionBBox | None, list[tuple[int, int]] | None]:
     """Locate the hole-array block in the lower-centre of slice 1, and
     enumerate the individual grid clusters within it.
 
@@ -99,10 +112,9 @@ def _detect_resolution_grids(image, geom):
     take the densest contiguous row run, then cluster the column profile
     into per-grid runs.
 
-    Returns (bbox, clusters_abs) or (None, None), where
-        bbox        = (ay0, ay1, ax0, ax1) spanning all grids
-        clusters_abs = list of (col_start, col_end_inclusive) in image coords,
-                       one per detected grid (left → right)
+    Returns ``(bbox, clusters_abs)`` or ``(None, None)``. ``clusters_abs``
+    is a list of ``(col_start, col_end_inclusive)`` in image coords, one
+    per detected grid (left → right).
     """
     cy, cx, r = geom.cy_px, geom.cx_px, geom.radius_px
     H, W = image.shape
@@ -146,11 +158,11 @@ def _detect_resolution_grids(image, geom):
     if not (8 <= (ay1 - ay0) <= 45 and 35 <= (ax1 - ax0) <= 130):
         return None, None
     clusters_abs = [(c0 + s, c0 + e) for s, e in clusters]
-    return (ay0, ay1, ax0, ax1), clusters_abs
+    return ResolutionBBox(ay0, ay1, ax0, ax1), clusters_abs
 
 
-def _detect_resolution_bbox(image, geom):
-    """Backward-compatible bbox-only view of :func:`_detect_resolution_grids`."""
+def _detect_resolution_bbox(image, geom) -> ResolutionBBox | None:
+    """Bbox-only view of :func:`_detect_resolution_grids`."""
     bbox, _ = _detect_resolution_grids(image, geom)
     return bbox
 
@@ -175,9 +187,8 @@ def _grid_count_from_bbox(bbox, clusters) -> int | None:
     """
     if bbox is None:
         return None
-    ay0, ay1, ax0, ax1 = bbox
-    bbox_w_px = max(1, ax1 - ax0)
-    bbox_h_px = max(1, ay1 - ay0)
+    bbox_w_px = max(1, bbox.x1 - bbox.x0)
+    bbox_h_px = max(1, bbox.y1 - bbox.y0)
     # Match crop_resolution_insert's 'full' padding so the aspect we evaluate
     # equals the aspect of the figure shown to the user.
     crop_w_px = bbox_w_px + 9   # x: c0-4 to c1+5

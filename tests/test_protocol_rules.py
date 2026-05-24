@@ -124,6 +124,12 @@ class ResultSemanticsTests(unittest.TestCase):
         self.assertEqual(result.status_text(), "ERROR")
         self.assertIn("Required ACR slice 1", result.error)
 
+    def _ramp_fit(self, top_mm, bot_mm):
+        ramp = slice_thickness.RampFit(fwhm_px=0.0, left_x=1.0, right_x=2.0)
+        return slice_thickness.SliceThicknessFit(
+            top_mm=top_mm, bot_mm=bot_mm, upper=ramp, lower=ramp,
+        )
+
     def test_slice_thickness_advisory_band_passes_with_warning(self):
         series = series_for(mapping={1: 0})
         geometry = PhantomGeometry(128.0, 128.0, 90.0, np.ones((256, 256), dtype=bool))
@@ -134,7 +140,7 @@ class ResultSemanticsTests(unittest.TestCase):
             patch.object(
                 slice_thickness,
                 "_measure_ramp_fwhms",
-                return_value=(58.0, 58.0, (1.0, 2.0, 1.0, 2.0)),
+                return_value=self._ramp_fit(58.0, 58.0),
             ),
             patch.object(slice_thickness, "render_annotated", return_value=None),
         ):
@@ -153,7 +159,7 @@ class ResultSemanticsTests(unittest.TestCase):
             patch.object(
                 slice_thickness,
                 "_measure_ramp_fwhms",
-                return_value=(61.0, 61.0, (1.0, 2.0, 1.0, 2.0)),
+                return_value=self._ramp_fit(61.0, 61.0),
             ),
             patch.object(slice_thickness, "render_annotated", return_value=None),
         ):
