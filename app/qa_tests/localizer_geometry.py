@@ -34,16 +34,14 @@ def _draw_si_length(ax, line, si_len: float) -> None:
 
 
 def _measure_si_length(localizer: DicomSeries, spec: PhantomSpec):
-    """Return ``(length_mm, image, bbox, line, retried)`` for the phantom
-    S-I length.
+    """Return ``(length_mm, image, bbox, line)`` for the phantom S-I length.
 
     ``bbox`` is ``(y0, y1, x0, x1)`` of the phantom mask. ``line`` is the
     two endpoint pixel coords ``((y, x), (y, x))`` drawn through the
-    phantom along the S-I axis. ``retried`` is True when the centerline
-    chord came out implausibly short and the measurement was retaken on
-    an off-axis chord — usually because the phantom's bottom-center
-    notch / fill insert sits on the centerline and the half-max edge
-    detector exits inside the notch.
+    phantom along the S-I axis. The phantom's bottom-center fill notch
+    sits on the centerline on most acquisitions, so when the centerline
+    chord comes out implausibly short the measurement is retaken on
+    chords offset to either side.
     """
     img = localizer.pixel_array[0].astype(np.float32)
     geom = localize_phantom(img)
@@ -91,25 +89,21 @@ def _measure_si_length(localizer: DicomSeries, spec: PhantomSpec):
     # noisy edge pixels; the half-max chord matches the in-plane diameters.
     length_mm, line = chord_at(0.0)
 
-    # The ACR phantom has a fill-port notch on the bottom face that often
-    # sits on the S-I centerline. The half-max edge detector exits at the
-    # top of the notch instead of the phantom's outer edge, producing a
-    # length way below the spec nominal. When that happens, retake the
-    # measurement on chords ±1 cm to either side of the centroid and keep
-    # the longest — those chords land on solid phantom and miss the notch.
-    retried = False
+    # The ACR phantom has a fill-port notch on the bottom face that sits
+    # on the S-I centerline of almost every sagittal acquisition. The
+    # half-max edge detector exits at the top of the notch instead of the
+    # phantom's outer edge, producing a length way below the spec nominal.
+    # When the centerline reads short, retake on chords 10 mm to either
+    # side of the centroid and keep the longest — those chords land on
+    # solid phantom and miss the notch.
     if length_mm < 0.8 * spec.si_length_mm:
         offset_px = 10.0 / (ps[1] if col_is_si else ps[0])
-        best_len, best_line = length_mm, line
         for off in (offset_px, -offset_px):
             alt_len, alt_line = chord_at(off)
-            if alt_len > best_len:
-                best_len, best_line = alt_len, alt_line
-        if best_len > length_mm:
-            length_mm, line = best_len, best_line
-            retried = True
+            if alt_len > length_mm:
+                length_mm, line = alt_len, alt_line
 
-    return length_mm, img, (y0, y1, x0, x1), line, retried
+    return length_mm, img, (y0, y1, x0, x1), line
 
 
 def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
@@ -124,7 +118,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         passed=True,
     )
     with res.capture_failures():
-        si_len, img, _, line, retried = _measure_si_length(series, spec)
+        si_len, img, _, line = _measure_si_length(series, spec)
         passed = abs(si_len - nominal_si) <= tol
         res.measurements.append(Measurement(
             label="Superior-inferior length",
@@ -149,16 +143,6 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
             "Edges via phantom mask extents; the S-I axis is taken from the "
             "DICOM ImageOrientationPatient tag."
         )
-
-        if retried:
-            res.add_warning(
-                "The centerline S-I chord came out implausibly short; the "
-                "phantom's bottom-center notch / fill insert likely sat on "
-                "the centerline. Retook the measurement on a chord 10 mm "
-                "off-center. Confirm the red line in the overlay lands on "
-                "solid phantom, not on the notch.",
-                severity="medium",
-            )
 
         res.flag_if_implausible(
             "Superior-inferior length",
