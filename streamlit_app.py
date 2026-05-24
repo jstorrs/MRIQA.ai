@@ -17,7 +17,7 @@ import streamlit as st
 # needed here. See streamlit.web.bootstrap (the line `sys.path.insert(0,
 # os.path.dirname(main_script_path))`).
 from app.io_dicom.dicom_loader import (
-    DicomSeries, load_series, validate_series,
+    DicomSeries, load_series, load_series_from_folder, validate_series,
 )
 from app.qa_tests import (
     AXIAL_TEST_ORDER, SAGITTAL_TEST_ORDER, AnalysisMode,
@@ -28,6 +28,7 @@ from app.ui import (
     uploads, validation, viewer,
 )
 from app.ui.banner import banner
+from app.ui.uploads import SeriesCatalogEntry
 
 EXPORTS_DIR = Path(__file__).resolve().parent / "exports"
 EXPORTS_DIR.mkdir(exist_ok=True)
@@ -105,32 +106,35 @@ local_folder = uploads.render_sidebar(APP_VERSION)
 # Load series from the catalog selection                                      #
 # --------------------------------------------------------------------------- #
 
-series: DicomSeries | None = st.session_state.series
 
-if local_folder.strip():
-    try:
-        from app.io_dicom.dicom_loader import load_series_from_folder
-        series = load_series_from_folder(local_folder.strip())
-        st.session_state.series = series
-        st.session_state.results = {}
-        st.session_state.series_warnings = validate_series(series)
-    except Exception as exc:
-        uploads.show_load_error(exc)
-elif st.session_state.series_catalog and st.session_state.get("selected_series_uid"):
-    chosen_uid = st.session_state["selected_series_uid"]
-    chosen = next((e for e in st.session_state.series_catalog
-                   if e["uid"] == chosen_uid), None)
-    if chosen and st.session_state.get("loaded_series_uid") != chosen_uid:
-        try:
-            series = load_series(chosen["sources"])
-            st.session_state.series = series
-            st.session_state.results = {}
-            st.session_state.series_warnings = validate_series(series)
-            st.session_state.loaded_series_uid = chosen_uid
-        except Exception as exc:
-            uploads.show_load_error(exc)
-    else:
-        series = st.session_state.series
+def _selected_catalog_entry() -> SeriesCatalogEntry | None:
+    """The catalog entry the sidebar dropdown currently points at, if any."""
+    catalog: list[SeriesCatalogEntry] = st.session_state.series_catalog
+    chosen_uid: str | None = st.session_state.get("selected_series_uid")
+    if not catalog or not chosen_uid:
+        return None
+    return next((e for e in catalog if e["uid"] == chosen_uid), None)
+
+
+def _apply_loaded_series(loaded: DicomSeries, *, loaded_uid: str | None = None) -> None:
+    """Store a freshly loaded series and reset everything derived from it."""
+    st.session_state.series = loaded
+    st.session_state.results = {}
+    st.session_state.series_warnings = validate_series(loaded)
+    if loaded_uid is not None:
+        st.session_state.loaded_series_uid = loaded_uid
+
+
+try:
+    if local_folder.strip():
+        _apply_loaded_series(load_series_from_folder(local_folder.strip()))
+    elif (entry := _selected_catalog_entry()) is not None and \
+            st.session_state.get("loaded_series_uid") != entry["uid"]:
+        _apply_loaded_series(load_series(entry["sources"]), loaded_uid=entry["uid"])
+except Exception as exc:
+    uploads.show_load_error(exc)
+
+series: DicomSeries | None = st.session_state.series
 
 # Phantom-spec and field-strength selection happen on the Analysis tab so the
 # inputs to the automated algorithms sit together.
