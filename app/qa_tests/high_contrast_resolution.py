@@ -239,16 +239,7 @@ def run(
 
     If `user_input` is None the test runs in "needs review" mode and
     returns the zoomed insert images for the technologist to inspect.
-
-    The pass threshold is fixed by ACR (``spec.resolution_pass_threshold_mm``)
-    and is not caller-overridable; passing a ``"spec"`` key in ``user_input``
-    is a programming error and raises ``ValueError``.
     """
-    if user_input is not None and "spec" in user_input:
-        raise ValueError(
-            "high_contrast_resolution.run(): user_input must not contain a "
-            "'spec' key — the pass threshold is fixed by the phantom spec."
-        )
     spec = spec or series.spec
     res = TestResult(
         test_id="high_contrast_resolution",

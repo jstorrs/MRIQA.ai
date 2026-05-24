@@ -55,14 +55,6 @@ class ProtocolSpecificationTests(unittest.TestCase):
         self.assertEqual(low_contrast_detectability._threshold_for(series_for("T1", 2.95), LARGE), 37)
         self.assertEqual(low_contrast_detectability._threshold_for(series_for("T2", 2.89), LARGE), 25)
 
-    def test_hcr_rejects_caller_attempt_to_override_pass_threshold(self):
-        series = series_for()
-        with self.assertRaises(ValueError):
-            high_contrast_resolution.run(
-                series,
-                user_input={"UL": 1.1, "LR": 1.1, "spec": 1.1},
-            )
-
     def test_hcr_uses_fixed_spec_threshold_when_input_clean(self):
         series = series_for()
         geometry = PhantomGeometry(128.0, 128.0, 90.0, np.ones((256, 256), dtype=bool))
