@@ -30,6 +30,13 @@ from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
 
 
+def _draw_hcr_title(ax, sizes_label: str) -> None:
+    ax.set_title(
+        f"Slice 1 — resolution insert: {sizes_label} mm (left→right)",
+        fontsize=9,
+    )
+
+
 def crop_resolution_insert(
     image: np.ndarray, geom, corner: str,
 ) -> tuple[np.ndarray, tuple[int, int, int, int]]:
@@ -264,16 +271,16 @@ def run(
                 )
             count_note += "."
 
-        def _draw_full(ax):
-            ax.set_title(
-                f"Slice 1 — resolution insert: {sizes_label} mm (left→right)",
-                fontsize=9,
-            )
         res.annotated_images.append((
             f"Slice 1 — resolution insert ({sizes_csv} mm, left→right). "
             "UL blocks = vertical holes (upper), LR blocks = horizontal holes (lower)."
             + count_note,
-            render_annotated(full_crop, "", _draw_full, figsize=(8.0, 3.0))))
+            render_annotated(
+                full_crop, "",
+                lambda ax: _draw_hcr_title(ax, sizes_label),
+                figsize=(8.0, 3.0),
+            ),
+        ))
 
         if user_input:
             threshold = float(user_input.get("spec", spec.resolution_pass_threshold_mm))

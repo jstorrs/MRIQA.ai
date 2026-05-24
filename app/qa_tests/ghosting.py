@@ -21,6 +21,7 @@ guard against the ROI falling off the image.
 from __future__ import annotations
 
 import numpy as np
+from matplotlib.patches import Circle, Ellipse
 
 from ..io_dicom.dicom_loader import DicomSeries
 from ..utils.geometry import (
@@ -30,6 +31,32 @@ from ..utils.phantom import localize_phantom, phantom_quality_warnings
 from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
+
+
+_AIR_ROI_COLORS = {"top": "yellow", "bottom": "yellow", "left": "magenta", "right": "magenta"}
+
+
+def _draw_ghosting(
+    ax,
+    *,
+    cx: float,
+    cy: float,
+    r_large: float,
+    rois: dict,
+    means: dict[str, float],
+    psg_pct: float,
+) -> None:
+    ax.add_patch(Circle((cx, cy), r_large, fill=False, edgecolor="cyan", lw=1.5))
+    for name, (rcy, rcx, sy, sx) in rois.items():
+        ax.add_patch(Ellipse(
+            (rcx, rcy), width=2 * sx, height=2 * sy,
+            fill=False, edgecolor=_AIR_ROI_COLORS[name], lw=1.5,
+        ))
+        ax.annotate(
+            f"{name}\n{means[name]:.1f}", (rcx, rcy),
+            color=_AIR_ROI_COLORS[name], fontsize=7, ha="center", va="center",
+        )
+    ax.set_title(f"Slice 7 — PSG = {psg_pct:.3f} %", fontsize=10)
 
 
 def _mm_to_px(mm: float, spacing_mm: float) -> float:
@@ -121,17 +148,14 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                     severity="medium",
                 )
 
-        def _draw(ax):
-            from matplotlib.patches import Circle, Ellipse
-            ax.add_patch(Circle((geom.cx_px, geom.cy_px), r_large, fill=False, edgecolor="cyan", lw=1.5))
-            colors = {"top": "yellow", "bottom": "yellow", "left": "magenta", "right": "magenta"}
-            for name, (cy, cx, sy, sx) in rois.items():
-                ax.add_patch(Ellipse((cx, cy), width=2 * sx, height=2 * sy,
-                                     fill=False, edgecolor=colors[name], lw=1.5))
-                ax.annotate(f"{name}\n{means[name]:.1f}", (cx, cy), color=colors[name],
-                            fontsize=7, ha="center", va="center")
-            ax.set_title(f"Slice 7 — PSG = {psg_pct:.3f} %", fontsize=10)
-
-        res.annotated_images.append((f"Slice 7 — ghosting ROIs (PSG={psg_pct:.3f}%)",
-                                     render_annotated(img, "", _draw)))
+        res.annotated_images.append((
+            f"Slice 7 — ghosting ROIs (PSG={psg_pct:.3f}%)",
+            render_annotated(
+                img, "",
+                lambda ax: _draw_ghosting(
+                    ax, cx=geom.cx_px, cy=geom.cy_px, r_large=r_large,
+                    rois=rois, means=means, psg_pct=psg_pct,
+                ),
+            ),
+        ))
     return res

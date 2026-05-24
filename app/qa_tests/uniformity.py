@@ -28,6 +28,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+from matplotlib.patches import Circle
 from scipy.ndimage import uniform_filter
 
 from ..io_dicom.dicom_loader import DicomSeries
@@ -36,6 +37,35 @@ from ..utils.phantom import localize_phantom, phantom_quality_warnings
 from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
+
+
+def _draw_uniformity(
+    ax,
+    *,
+    cx: float,
+    cy: float,
+    r_large: float,
+    r_small: float,
+    high_xy: tuple[int, int],
+    low_xy: tuple[int, int],
+    s_high: float,
+    s_low: float,
+    piu: float,
+) -> None:
+    ax.add_patch(Circle((cx, cy), r_large, fill=False, edgecolor="cyan", lw=1.5))
+    cx_high, cy_high = high_xy
+    cx_low, cy_low = low_xy
+    ax.add_patch(Circle((cx_high, cy_high), r_small, fill=False, edgecolor="red", lw=1.6))
+    ax.annotate(
+        f"max={s_high:.0f}", (cx_high, cy_high), color="red", fontsize=8,
+        xytext=(8, -8), textcoords="offset points",
+    )
+    ax.add_patch(Circle((cx_low, cy_low), r_small, fill=False, edgecolor="blue", lw=1.6))
+    ax.annotate(
+        f"min={s_low:.0f}", (cx_low, cy_low), color="blue", fontsize=8,
+        xytext=(8, 8), textcoords="offset points",
+    )
+    ax.set_title(f"Slice 7 — PIU = {piu:.2f} %", fontsize=10)
 
 
 def _candidate_centers(
@@ -165,20 +195,18 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                 severity="low",
             )
 
-        # ----- Annotate -----
-        def _draw(ax):
-            from matplotlib.patches import Circle
-            # Large ROI
-            ax.add_patch(Circle((geom.cx_px, geom.cy_px), r_large, fill=False, edgecolor="cyan", lw=1.5))
-            # Small high (red) and low (blue) ROIs
-            ax.add_patch(Circle((cx_high, cy_high), r_small, fill=False, edgecolor="red", lw=1.6))
-            ax.annotate(f"max={s_high:.0f}", (cx_high, cy_high), color="red", fontsize=8,
-                        xytext=(8, -8), textcoords="offset points")
-            ax.add_patch(Circle((cx_low, cy_low), r_small, fill=False, edgecolor="blue", lw=1.6))
-            ax.annotate(f"min={s_low:.0f}", (cx_low, cy_low), color="blue", fontsize=8,
-                        xytext=(8, 8), textcoords="offset points")
-            ax.set_title(f"Slice 7 — PIU = {piu:.2f} %", fontsize=10)
-
-        res.annotated_images.append((f"Slice 7 — PIU={piu:.2f}%",
-                                     render_annotated(img, "", _draw)))
+        res.annotated_images.append((
+            f"Slice 7 — PIU={piu:.2f}%",
+            render_annotated(
+                img, "",
+                lambda ax: _draw_uniformity(
+                    ax,
+                    cx=geom.cx_px, cy=geom.cy_px,
+                    r_large=r_large, r_small=r_small,
+                    high_xy=(cx_high, cy_high),
+                    low_xy=(cx_low, cy_low),
+                    s_high=s_high, s_low=s_low, piu=piu,
+                ),
+            ),
+        ))
     return res

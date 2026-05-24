@@ -22,6 +22,17 @@ from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
 
 
+def _draw_si_length(ax, line, si_len: float) -> None:
+    (ya, xa), (yb, xb) = line
+    ax.plot([xa, xb], [ya, yb], color="red", lw=2)
+    ax.annotate(
+        f"{si_len:.1f} mm",
+        xy=((xa + xb) / 2, (ya + yb) / 2),
+        color="red", fontsize=9,
+        xytext=(8, 0), textcoords="offset points",
+    )
+
+
 def _measure_si_length(localizer: DicomSeries):
     """Return (length_mm, image, bbox, line) for the phantom S-I length.
 
@@ -96,17 +107,13 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
             passed=passed,
         ))
 
-        def _draw(ax, line=line, si_len=si_len):
-            (ya, xa), (yb, xb) = line
-            ax.plot([xa, xb], [ya, yb], color="red", lw=2)
-            ax.annotate(f"{si_len:.1f} mm",
-                        xy=((xa + xb) / 2, (ya + yb) / 2),
-                        color="red", fontsize=9,
-                        xytext=(8, 0), textcoords="offset points")
-
         res.annotated_images.append((
             f"Sagittal localizer: S-I length ({nominal_si:.0f} mm nominal)",
-            render_annotated(img, "Sagittal localizer — S-I length", _draw)))
+            render_annotated(
+                img, "Sagittal localizer — S-I length",
+                lambda ax: _draw_si_length(ax, line, si_len),
+            ),
+        ))
 
         res.passed = passed
         res.notes = (

@@ -33,6 +33,13 @@ from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
 
 
+def _draw_lcd_title(ax, acr: int) -> None:
+    ax.set_title(
+        f"Slice {acr} — low-contrast spokes (count complete spokes)",
+        fontsize=9,
+    )
+
+
 def _lcd_chamber_center(img: np.ndarray, phantom_mask: np.ndarray) -> tuple[float, float] | None:
     """Centroid of the LCD insert chamber on an axial slice.
 
@@ -117,13 +124,14 @@ def run(
                     severity="medium",
                 )
 
-            def _draw(ax, acr=acr):
-                ax.set_title(f"Slice {acr} — low-contrast spokes (count complete spokes)",
-                             fontsize=9)
-
             res.annotated_images.append((
                 f"Slice {acr} — LCD pattern",
-                render_annotated(crop, "", _draw, wl=wl, ww=ww)))
+                render_annotated(
+                    crop, "",
+                    lambda ax, acr=acr: _draw_lcd_title(ax, acr),
+                    wl=wl, ww=ww,
+                ),
+            ))
 
         if user_input:
             total = 0

@@ -64,14 +64,14 @@ def _fwhm_with_pos(profile: np.ndarray, x0: int):
     return rf - lf, x0 + lf, x0 + rf
 
 
-def _find_void_band(img: np.ndarray, cx: float, cy: float, R: float) -> tuple[int, int]:
+def _find_void_band(img: np.ndarray, cx: float, cy: float, radius_px: float) -> tuple[int, int]:
     """Locate the slice-thickness void band as a short, low-signal row run
     near the phantom centre, bracketed above and below by bright phantom.
     Returns ``(band_top, band_bot)`` (inclusive row indices)."""
-    c_lo, c_hi = int(cx - 0.20 * R), int(cx + 0.20 * R)
+    c_lo, c_hi = int(cx - 0.20 * radius_px), int(cx + 0.20 * radius_px)
     rprof = _smooth(img[:, c_lo:c_hi].mean(axis=1), 3)
     H = img.shape[0]
-    y0, y1 = max(0, int(cy - R)), min(H, int(cy + R))
+    y0, y1 = max(0, int(cy - radius_px)), min(H, int(cy + radius_px))
     bright = float(np.percentile(rprof[y0:y1], 90))
     void_t = bright * 0.50
     bright_t = bright * 0.80
@@ -92,10 +92,10 @@ def _find_void_band(img: np.ndarray, cx: float, cy: float, R: float) -> tuple[in
     return band_top, band_bot
 
 
-def _find_septum(img: np.ndarray, band_top: int, band_bot: int, cx: float, R: float) -> int:
+def _find_septum(img: np.ndarray, band_top: int, band_bot: int, cx: float, radius_px: float) -> int:
     """Row index of the dark septum between the two bright ramps inside the
     slice-thickness insert."""
-    cc_lo, cc_hi = int(cx - 0.25 * R), int(cx + 0.25 * R)
+    cc_lo, cc_hi = int(cx - 0.25 * radius_px), int(cx + 0.25 * radius_px)
     bright = _smooth(img[band_top:band_bot + 1, cc_lo:cc_hi].mean(axis=1), 3)
     mid = len(bright) // 2
     up_peak = int(np.argmax(bright[: mid + 1]))
@@ -106,19 +106,54 @@ def _find_septum(img: np.ndarray, band_top: int, band_bot: int, cx: float, R: fl
     return min(max(septum, band_top + 1), band_bot - 1)
 
 
+def _draw_slice_thickness(
+    ax,
+    *,
+    cx: float,
+    radius_px: float,
+    band_top: int,
+    band_bot: int,
+    septum: int,
+    top_mm: float,
+    bot_mm: float,
+    thickness_mm: float,
+    u_l, u_r, l_l, l_r,
+    zoom: bool = True,
+) -> None:
+    up_row = (band_top + septum) // 2
+    lo_row = (septum + 1 + band_bot) // 2
+    if u_l is not None:
+        ax.plot([u_l, u_r], [up_row, up_row], color="cyan", lw=2)
+        ax.annotate(
+            f"top {top_mm:.1f} mm", (u_r, up_row), color="cyan",
+            fontsize=8, va="center", xytext=(5, -6), textcoords="offset points",
+        )
+    if l_l is not None:
+        ax.plot([l_l, l_r], [lo_row, lo_row], color="magenta", lw=2)
+        ax.annotate(
+            f"bot {bot_mm:.1f} mm", (l_r, lo_row), color="magenta",
+            fontsize=8, va="center", xytext=(5, 6), textcoords="offset points",
+        )
+    ax.set_title(f"Slice 1 — slice thickness {thickness_mm:.2f} mm", fontsize=10)
+    if zoom:
+        pad = int(0.6 * radius_px)
+        ax.set_xlim(cx - pad, cx + pad)
+        ax.set_ylim(band_bot + 12, band_top - 12)  # inverted y (image coords)
+
+
 def _measure_ramp_fwhms(
     img: np.ndarray,
     band_top: int,
     septum: int,
     band_bot: int,
     cx: float,
-    R: float,
+    radius_px: float,
     col_spacing_mm: float,
 ) -> tuple[float, float, tuple]:
     """Measure the FWHM of the upper and lower bright ramps inside the
     insert. Returns ``(top_mm, bot_mm, annotation)`` where ``annotation`` is
     ``(u_l, u_r, l_l, l_r)`` sub-pixel x positions for the overlay."""
-    x0, x1 = int(cx - 0.55 * R), int(cx + 0.55 * R)
+    x0, x1 = int(cx - 0.55 * radius_px), int(cx + 0.55 * radius_px)
     up_prof = img[band_top:septum, x0:x1].mean(axis=0)
     lo_prof = img[septum + 1:band_bot + 1, x0:x1].mean(axis=0)
     fu, u_l, u_r = _fwhm_with_pos(up_prof, x0)
@@ -144,12 +179,12 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         img = series.slice(1).astype(np.float32)
         ps = series.metadata.pixel_spacing_mm   # (row, col)
         geom = localize_phantom(img)
-        cx, cy, R = geom.cx_px, geom.cy_px, geom.radius_px
+        cx, cy, radius_px = geom.cx_px, geom.cy_px, geom.radius_px
 
-        band_top, band_bot = _find_void_band(img, cx, cy, R)
-        septum = _find_septum(img, band_top, band_bot, cx, R)
+        band_top, band_bot = _find_void_band(img, cx, cy, radius_px)
+        septum = _find_septum(img, band_top, band_bot, cx, radius_px)
         top_mm, bot_mm, (u_l, u_r, l_l, l_r) = _measure_ramp_fwhms(
-            img, band_top, septum, band_bot, cx, R, ps[1],
+            img, band_top, septum, band_bot, cx, radius_px, ps[1],
         )
 
         thickness_mm = 0.2 * (top_mm * bot_mm) / (top_mm + bot_mm)
@@ -171,32 +206,20 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
             "above the void baseline."
         )
 
-        up_row = (band_top + septum) // 2
-        lo_row = (septum + 1 + band_bot) // 2
-
-        def _draw(ax):
-            if u_l is not None:
-                ax.plot([u_l, u_r], [up_row, up_row], color="cyan", lw=2)
-                ax.annotate(f"top {top_mm:.1f} mm", (u_r, up_row), color="cyan",
-                            fontsize=8, va="center", xytext=(5, -6),
-                            textcoords="offset points")
-            if l_l is not None:
-                ax.plot([l_l, l_r], [lo_row, lo_row], color="magenta", lw=2)
-                ax.annotate(f"bot {bot_mm:.1f} mm", (l_r, lo_row), color="magenta",
-                            fontsize=8, va="center", xytext=(5, 6),
-                            textcoords="offset points")
-            ax.set_title(f"Slice 1 — slice thickness {thickness_mm:.2f} mm", fontsize=10)
-
-        # Zoom the annotated view onto the insert so the ramps are visible
-        def _draw_zoom(ax):
-            _draw(ax)
-            pad = int(0.6 * R)
-            ax.set_xlim(cx - pad, cx + pad)
-            ax.set_ylim(band_bot + 12, band_top - 12)  # inverted y (image coords)
-
         res.annotated_images.append((
             f"Slice 1 — slice-thickness ramps (={thickness_mm:.2f} mm)",
-            render_annotated(img, "", _draw_zoom, figsize=(8.0, 3.0))))
+            render_annotated(
+                img, "",
+                lambda ax: _draw_slice_thickness(
+                    ax,
+                    cx=cx, radius_px=radius_px,
+                    band_top=band_top, band_bot=band_bot, septum=septum,
+                    top_mm=top_mm, bot_mm=bot_mm, thickness_mm=thickness_mm,
+                    u_l=u_l, u_r=u_r, l_l=l_l, l_r=l_r,
+                ),
+                figsize=(8.0, 3.0),
+            ),
+        ))
 
         # --- 4. Detection-quality heuristics ---
         res.flag_if_implausible(

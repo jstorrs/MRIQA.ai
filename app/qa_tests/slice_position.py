@@ -30,6 +30,8 @@ profiles (it returned the whole phantom diameter, not the short bars).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 from ..io_dicom.dicom_loader import DicomSeries
@@ -40,21 +42,37 @@ from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
 
 
-def _measure_one(img: np.ndarray, ps_row: float):
-    """Return a dict with bar lengths + geometry for one slice."""
+@dataclass(frozen=True)
+class _BarMeasurement:
+    left_len: float
+    right_len: float
+    bar_diff: float
+    left_col: int
+    right_col: int
+    top: float
+    left_bot: float
+    right_bot: float
+    cx: float
+    radius_px: float
+    rim: int
+
+
+def _measure_one(img: np.ndarray, ps_row: float) -> _BarMeasurement:
+    """Measure left/right bar lengths + overlay geometry for one slice."""
     geom = localize_phantom(img)
-    cx, R = geom.cx_px, geom.radius_px
+    cx, radius_px = geom.cx_px, geom.radius_px
     bg = float(np.median(img[img > img.max() * 0.3]))
     half = bg * 0.5
 
     # 1. Phantom rim near the top, sampled from a solid column beside the bars
-    side_c = int(cx - 0.22 * R)
+    side_c = int(cx - 0.22 * radius_px)
     side_c = min(max(side_c, 0), img.shape[1] - 1)
     rim = int(np.argmax(img[:, side_c] > half))
-    r0, r1 = rim, int(rim + 0.5 * R)
+    r0, r1 = rim, int(rim + 0.5 * radius_px)
 
     # 2. Per-column first dark run (the bar) below the rim
-    col_top, col_bot = {}, {}
+    col_top: dict[int, int] = {}
+    col_bot: dict[int, int] = {}
     for c in range(int(cx - 15), int(cx + 16)):
         if c < 0 or c >= img.shape[1]:
             continue
@@ -92,13 +110,38 @@ def _measure_one(img: np.ndarray, ps_row: float):
     rb = _refine(right)
     left_len = (lb - top_shared) * ps_row
     right_len = (rb - top_shared) * ps_row
-    return {
-        "left_len": left_len, "right_len": right_len,
-        "bar_diff": left_len - right_len,
-        "left_col": int(np.median(left)), "right_col": int(np.median(right)),
-        "top": top_shared, "left_bot": lb, "right_bot": rb,
-        "cx": cx, "R": R, "rim": rim,
-    }
+    return _BarMeasurement(
+        left_len=left_len,
+        right_len=right_len,
+        bar_diff=left_len - right_len,
+        left_col=int(np.median(left)),
+        right_col=int(np.median(right)),
+        top=top_shared,
+        left_bot=lb,
+        right_bot=rb,
+        cx=cx,
+        radius_px=radius_px,
+        rim=rim,
+    )
+
+
+def _draw_slice_position(ax, m: _BarMeasurement, acr_slice: int) -> None:
+    ax.plot([m.left_col, m.left_col], [m.top, m.left_bot], color="cyan", lw=2)
+    ax.plot([m.right_col, m.right_col], [m.top, m.right_bot], color="magenta", lw=2)
+    ax.annotate(
+        f"L={m.left_len:.1f}", (m.left_col, m.left_bot),
+        color="cyan", fontsize=8, ha="right", va="top",
+        xytext=(-4, 6), textcoords="offset points",
+    )
+    ax.annotate(
+        f"R={m.right_len:.1f}", (m.right_col, m.right_bot),
+        color="magenta", fontsize=8, ha="left", va="top",
+        xytext=(4, 6), textcoords="offset points",
+    )
+    pad = int(0.55 * m.radius_px)
+    ax.set_xlim(m.cx - pad, m.cx + pad)
+    ax.set_ylim(m.top + 0.6 * m.radius_px, m.rim - 8)
+    ax.set_title(f"Slice {acr_slice} — bar Δ = {m.bar_diff:+.2f} mm", fontsize=10)
 
 
 def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
@@ -118,8 +161,8 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                 continue
             img = slice_img.astype(np.float32)
             try:
-                r = _measure_one(img, ps[0])
-            except Exception as exc:
+                m = _measure_one(img, ps[0])
+            except ValueError as exc:
                 res.measurements.append(Measurement(
                     label=f"Slice {acr_slice} bar-length difference",
                     value=float("nan"), unit="mm",
@@ -128,7 +171,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                 res.add_warning(f"Slice {acr_slice}: {exc}", severity="medium")
                 continue
 
-            diff = r["bar_diff"]
+            diff = m.bar_diff
             passed = abs(diff) <= tol
             res.measurements.append(Measurement(
                 label=f"Slice {acr_slice} bar-length difference",
@@ -136,25 +179,13 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
                 spec=f"|Δ| ≤ {tol} mm", passed=passed,
             ))
 
-            def _draw(ax, r=r, acr_slice=acr_slice):
-                ax.plot([r["left_col"], r["left_col"]], [r["top"], r["left_bot"]],
-                        color="cyan", lw=2)
-                ax.plot([r["right_col"], r["right_col"]], [r["top"], r["right_bot"]],
-                        color="magenta", lw=2)
-                ax.annotate(f"L={r['left_len']:.1f}", (r["left_col"], r["left_bot"]),
-                            color="cyan", fontsize=8, ha="right", va="top",
-                            xytext=(-4, 6), textcoords="offset points")
-                ax.annotate(f"R={r['right_len']:.1f}", (r["right_col"], r["right_bot"]),
-                            color="magenta", fontsize=8, ha="left", va="top",
-                            xytext=(4, 6), textcoords="offset points")
-                pad = int(0.55 * r["R"])
-                ax.set_xlim(r["cx"] - pad, r["cx"] + pad)
-                ax.set_ylim(r["top"] + 0.6 * r["R"], r["rim"] - 8)
-                ax.set_title(f"Slice {acr_slice} — bar Δ = {r['bar_diff']:+.2f} mm", fontsize=10)
-
             res.annotated_images.append((
                 f"Slice {acr_slice} — slice position (Δ={diff:+.2f} mm)",
-                render_annotated(img, "", _draw)))
+                render_annotated(
+                    img, "",
+                    lambda ax, m=m, s=acr_slice: _draw_slice_position(ax, m, s),
+                ),
+            ))
 
             # Detection-quality heuristic
             res.flag_if_implausible(
