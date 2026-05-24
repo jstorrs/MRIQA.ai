@@ -8,19 +8,15 @@ tab (just the visual subset, once at least one has been saved).
 
 from __future__ import annotations
 
-import logging
-
 import streamlit as st
 
 from ..io_dicom.dicom_loader import DicomSeries
-from ..qa_tests import AnalysisMode, TestSpec, applicable_test_order
+from ..qa_tests import AnalysisMode, TestSpec, applicable_test_order, run_test
 from ..qa_tests.base import TestResult, verdict_of
 from .badges import confidence_badge, status_badge
 from .banner import banner
 from .history import snapshot_run
 
-
-logger = logging.getLogger(__name__)
 
 # Test IDs that need manual scoring rather than an automated run.
 VISUAL_TEST_IDS = {"high_contrast_resolution", "low_contrast_detectability"}
@@ -48,14 +44,7 @@ def run_automated_tests(
             (i + 1) / max(1, len(automated)),
             text=f"Running {t.label}...",
         )
-        try:
-            out[t.id] = t.runner.run(series, spec=series.spec)
-        except Exception as e:  # surface to the user; never crash the run loop
-            logger.exception("QA test %r crashed", t.id)
-            out[t.id] = TestResult(
-                test_id=t.id, test_name=t.label, automated=True,
-                passed=None, error=str(e),
-            )
+        out[t.id] = run_test(t, series)
     prog.empty()
     return out
 

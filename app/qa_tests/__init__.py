@@ -13,9 +13,10 @@ the test id, human label, and the module exposing ``run(series, ...)``.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from types import ModuleType
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from .base import TestResult as TestResult  # re-export
 from . import (
@@ -28,6 +29,11 @@ from . import (
     low_contrast_detectability,
     localizer_geometry,
 )
+
+if TYPE_CHECKING:
+    from ..io_dicom.dicom_loader import DicomSeries
+
+logger = logging.getLogger(__name__)
 
 
 # Two modes today — axial protocol and sagittal localizer. A Literal is
@@ -58,6 +64,25 @@ AXIAL_TEST_ORDER: list[TestSpec] = [
 SAGITTAL_TEST_ORDER: list[TestSpec] = [
     TestSpec("localizer_geometric_accuracy", "Geometric Accuracy — Sagittal Localizer", localizer_geometry),
 ]
+
+
+def run_test(test: TestSpec, series: "DicomSeries") -> TestResult:
+    """Run a single QA test and guarantee a TestResult is returned.
+
+    Each test's body wraps itself in ``TestResult.capture_failures`` so an
+    exception inside the detector becomes ``error=...`` on the result. This
+    wrapper is the belt-and-suspenders for the rare case the test raises
+    *before* entering that context manager (e.g. failing to construct the
+    TestResult itself), so the run loop is never crashed by one bad test.
+    """
+    try:
+        return test.runner.run(series, spec=series.spec)
+    except Exception as exc:  # noqa: BLE001 — surface to user, never crash run loop
+        logger.exception("QA test %r crashed outside capture_failures", test.id)
+        return TestResult(
+            test_id=test.id, test_name=test.label, automated=True,
+            passed=None, error=f"{type(exc).__name__}: {exc}",
+        )
 
 
 def applicable_test_order(

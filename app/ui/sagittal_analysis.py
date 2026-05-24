@@ -10,8 +10,7 @@ from __future__ import annotations
 import streamlit as st
 
 from ..io_dicom.dicom_loader import DicomSeries
-from ..qa_tests import TestSpec
-from ..qa_tests.base import TestResult
+from ..qa_tests import TestSpec, run_test
 from . import analysis_inputs
 from .badges import normalize_img
 
@@ -53,13 +52,6 @@ def render(series: DicomSeries, test_order: list[TestSpec]) -> None:
     if st.button("Run S-I length test", type="primary"):
         results = dict(st.session_state.results)
         for t in test_order:
-            try:
-                res = t.runner.run(series, spec=series.spec)
-            except Exception as exc:
-                res = TestResult(
-                    test_id=t.id, test_name=t.label, automated=True,
-                    passed=None, error=str(exc),
-                )
-            results[t.id] = res
+            results[t.id] = run_test(t, series)
         st.session_state.results = results
         st.rerun()
