@@ -38,6 +38,41 @@ from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
 
 
+def _candidate_centers(
+    img: np.ndarray,
+    candidate_mask: np.ndarray,
+    box_size: int,
+    r_small: float,
+    large_mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Return ``(ys, xs, n_excluded)`` for small-ROI candidate centres inside
+    the candidate mask that don't overlap air voxels.
+
+    A small ROI is only a valid candidate if it lies entirely on phantom
+    signal; this excludes positions whose averaging box catches the
+    phantom's top air bubble or other voids. Falls back to *including*
+    air-overlapping candidates when fewer than 10 air-free positions
+    remain (better a degraded measurement than no measurement at all).
+    """
+    med = float(np.median(img[large_mask]))
+    air = (img < 0.5 * med).astype(np.float32)
+    air_frac = uniform_filter(air, size=box_size)
+
+    margin = int(math.ceil(r_small))
+    ys, xs = np.where(candidate_mask)
+    valid = (
+        (ys >= margin) & (ys < img.shape[0] - margin)
+        & (xs >= margin) & (xs < img.shape[1] - margin)
+    )
+    ys, xs = ys[valid], xs[valid]
+    af = air_frac[ys, xs]
+    clean = af <= 1e-6
+    n_excluded = int((~clean).sum())
+    if clean.sum() >= 10:
+        ys, xs = ys[clean], xs[clean]
+    return ys, xs, n_excluded
+
+
 def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
     spec = spec or series.spec
     large_area = spec.piu_large_roi_area_cm2
@@ -78,25 +113,9 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         box_size = max(3, int(math.ceil(2 * r_small)))
         small_mean = uniform_filter(img, size=box_size)
 
-        # --- Exclude air / voids (e.g. the phantom's top air bubble or any
-        #     structural void) so they don't dominate the "low" ROI. We measure
-        #     the uniformity of phantom *material*, not air. A small ROI is only
-        #     a valid candidate if it lies entirely on phantom signal.
-        med = float(np.median(img[large_mask]))
-        air = (img < 0.5 * med).astype(np.float32)
-        air_frac = uniform_filter(air, size=box_size)   # fraction of small ROI that is air
-
-        # Candidate centers: inside the (tightened) large ROI, away from the
-        # image edge, no air overlap.
-        margin = int(math.ceil(r_small))
-        ys, xs = np.where(candidate_mask)
-        valid = (ys >= margin) & (ys < img.shape[0] - margin) & (xs >= margin) & (xs < img.shape[1] - margin)
-        ys, xs = ys[valid], xs[valid]
-        af = air_frac[ys, xs]
-        clean = af <= 1e-6
-        n_excluded = int((~clean).sum())
-        if clean.sum() >= 10:           # keep only air-free candidates if enough remain
-            ys, xs = ys[clean], xs[clean]
+        ys, xs, n_excluded = _candidate_centers(
+            img, candidate_mask, box_size, r_small, large_mask,
+        )
         if n_excluded > 20:
             res.add_warning(
                 f"Excluded {n_excluded} ROI position(s) overlapping air/void (e.g. the "

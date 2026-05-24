@@ -25,6 +25,7 @@ half-max crossings, and convert pixels → mm with PixelSpacing.
 from __future__ import annotations
 
 import math
+from typing import Callable
 
 import numpy as np
 
@@ -34,6 +35,17 @@ from ..utils.phantom import PhantomGeometry, localize_phantom
 from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
+
+
+_SLICE1_DIRS = [("Horizontal (L-R)", 0.0), ("Vertical (A-P)", 90.0)]
+_SLICE5_DIRS = [
+    ("Horizontal (L-R)", 0.0),
+    ("Vertical (A-P)",   90.0),
+    ("Diagonal 45°",     45.0),
+    ("Diagonal 135°",    135.0),
+]
+_SLICE1_COLORS = ["cyan", "magenta"]
+_SLICE5_COLORS = ["cyan", "magenta", "yellow", "lime"]
 
 
 def _measure_length_along(
@@ -61,6 +73,45 @@ def _measure_length_along(
     return length_mm, (y_in, x_in), (y_out, x_out)
 
 
+def _measure_slice_diameters(
+    img: np.ndarray,
+    ps: tuple[float, float],
+    dirs: list[tuple[str, float]],
+    slice_label: str,
+    nominal_d: float,
+    tol: float,
+    line_width: float,
+) -> tuple[list[Measurement], Callable]:
+    """Measure each requested diameter on one slice and return the
+    measurements plus a drawing callback for the annotated overlay."""
+    geom = localize_phantom(img)
+    endpoints: list[tuple[str, tuple, tuple, float]] = []
+    measurements: list[Measurement] = []
+    for label, ang in dirs:
+        length_mm, pa, pb = _measure_length_along(img, geom, ang, ps)
+        measurements.append(Measurement(
+            label=f"{slice_label} — {label} diameter",
+            value=round(length_mm, 2),
+            unit="mm",
+            spec=f"{nominal_d} ± {tol} mm",
+            passed=abs(length_mm - nominal_d) <= tol,
+        ))
+        endpoints.append((label, pa, pb, length_mm))
+
+    colors = _SLICE5_COLORS if len(dirs) > 2 else _SLICE1_COLORS
+
+    def _draw(ax):
+        for (_label, pa, pb, L), c in zip(endpoints, colors):
+            ax.plot([pa[1], pb[1]], [pa[0], pb[0]], color=c, lw=line_width)
+            ax.annotate(
+                f"{L:.1f}",
+                xy=((pa[1] + pb[1]) / 2, (pa[0] + pb[0]) / 2),
+                color=c, fontsize=8, xytext=(6, 6), textcoords="offset points",
+            )
+
+    return measurements, _draw
+
+
 def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
     spec = spec or series.spec
     nominal_d = spec.diameter_mm
@@ -74,64 +125,19 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
     with res.capture_failures():
         ps = series.metadata.pixel_spacing_mm
 
-        # ----- Axial slice 1: two diameters -----
-        img1 = series.slice(1)
-        geom1 = localize_phantom(img1)
-        slice1_dirs = [("Horizontal (L-R)", 0.0), ("Vertical (A-P)", 90.0)]
-        s1_endpoints = []
-        for label, ang in slice1_dirs:
-            length_mm, pa, pb = _measure_length_along(img1, geom1, ang, ps)
-            res.measurements.append(Measurement(
-                label=f"Slice 1 — {label} diameter",
-                value=round(length_mm, 2),
-                unit="mm",
-                spec=f"{nominal_d} ± {tol} mm",
-                passed=abs(length_mm - nominal_d) <= tol,
+        for acr_slice, dirs, line_width, caption in (
+            (1, _SLICE1_DIRS, 1.8, "Slice 1: horizontal & vertical diameters"),
+            (5, _SLICE5_DIRS, 1.6, "Slice 5: four diameters"),
+        ):
+            img = series.slice(acr_slice)
+            measurements, draw = _measure_slice_diameters(
+                img, ps, dirs, f"Slice {acr_slice}", nominal_d, tol, line_width,
+            )
+            res.measurements.extend(measurements)
+            res.annotated_images.append((
+                caption,
+                render_annotated(img, f"Slice {acr_slice} — geometric accuracy", draw),
             ))
-            s1_endpoints.append((label, pa, pb, length_mm))
-
-        def _draw_slice1(ax):
-            colors = ["cyan", "magenta"]
-            for (label, pa, pb, L), c in zip(s1_endpoints, colors):
-                ax.plot([pa[1], pb[1]], [pa[0], pb[0]], color=c, lw=1.8)
-                ax.annotate(f"{L:.1f}", xy=((pa[1] + pb[1]) / 2, (pa[0] + pb[0]) / 2),
-                            color=c, fontsize=8, xytext=(6, 6), textcoords="offset points")
-
-        res.annotated_images.append((
-            "Slice 1: horizontal & vertical diameters",
-            render_annotated(img1, "Slice 1 — geometric accuracy", _draw_slice1)))
-
-        # ----- Axial slice 5: four diameters -----
-        img5 = series.slice(5)
-        geom5 = localize_phantom(img5)
-        slice5_dirs = [
-            ("Horizontal (L-R)", 0.0),
-            ("Vertical (A-P)",   90.0),
-            ("Diagonal 45°",     45.0),
-            ("Diagonal 135°",    135.0),
-        ]
-        s5_endpoints = []
-        for label, ang in slice5_dirs:
-            length_mm, pa, pb = _measure_length_along(img5, geom5, ang, ps)
-            res.measurements.append(Measurement(
-                label=f"Slice 5 — {label} diameter",
-                value=round(length_mm, 2),
-                unit="mm",
-                spec=f"{nominal_d} ± {tol} mm",
-                passed=abs(length_mm - nominal_d) <= tol,
-            ))
-            s5_endpoints.append((label, pa, pb, length_mm))
-
-        def _draw_slice5(ax):
-            colors = ["cyan", "magenta", "yellow", "lime"]
-            for (label, pa, pb, L), c in zip(s5_endpoints, colors):
-                ax.plot([pa[1], pb[1]], [pa[0], pb[0]], color=c, lw=1.6)
-                ax.annotate(f"{L:.1f}", xy=((pa[1] + pb[1]) / 2, (pa[0] + pb[0]) / 2),
-                            color=c, fontsize=8, xytext=(6, 6), textcoords="offset points")
-
-        res.annotated_images.append((
-            "Slice 5: four diameters",
-            render_annotated(img5, "Slice 5 — geometric accuracy", _draw_slice5)))
 
         res.finalize_pass()
         res.notes = (

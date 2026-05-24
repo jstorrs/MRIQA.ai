@@ -64,6 +64,72 @@ def _fwhm_with_pos(profile: np.ndarray, x0: int):
     return rf - lf, x0 + lf, x0 + rf
 
 
+def _find_void_band(img: np.ndarray, cx: float, cy: float, R: float) -> tuple[int, int]:
+    """Locate the slice-thickness void band as a short, low-signal row run
+    near the phantom centre, bracketed above and below by bright phantom.
+    Returns ``(band_top, band_bot)`` (inclusive row indices)."""
+    c_lo, c_hi = int(cx - 0.20 * R), int(cx + 0.20 * R)
+    rprof = _smooth(img[:, c_lo:c_hi].mean(axis=1), 3)
+    H = img.shape[0]
+    y0, y1 = max(0, int(cy - R)), min(H, int(cy + R))
+    bright = float(np.percentile(rprof[y0:y1], 90))
+    void_t = bright * 0.50
+    bright_t = bright * 0.80
+    candidates: list[tuple[float, int, int]] = []
+    for s, e in contiguous_runs(rprof < void_t):
+        L = e - s + 1
+        if not (3 <= L <= 20):
+            continue
+        above = rprof[max(0, s - 4):s]
+        below = rprof[e + 1:min(len(rprof), e + 5)]
+        if (above >= bright_t).sum() < 3 or (below >= bright_t).sum() < 3:
+            continue
+        candidates.append((abs((s + e) / 2 - cy), s, e))
+    if not candidates:
+        raise ValueError("Slice-thickness void band not found near phantom centre.")
+    candidates.sort()
+    _, band_top, band_bot = candidates[0]
+    return band_top, band_bot
+
+
+def _find_septum(img: np.ndarray, band_top: int, band_bot: int, cx: float, R: float) -> int:
+    """Row index of the dark septum between the two bright ramps inside the
+    slice-thickness insert."""
+    cc_lo, cc_hi = int(cx - 0.25 * R), int(cx + 0.25 * R)
+    bright = _smooth(img[band_top:band_bot + 1, cc_lo:cc_hi].mean(axis=1), 3)
+    mid = len(bright) // 2
+    up_peak = int(np.argmax(bright[: mid + 1]))
+    lo_peak = mid + int(np.argmax(bright[mid:]))
+    if lo_peak <= up_peak:
+        lo_peak = min(len(bright) - 1, up_peak + 1)
+    septum = band_top + up_peak + int(np.argmin(bright[up_peak:lo_peak + 1]))
+    return min(max(septum, band_top + 1), band_bot - 1)
+
+
+def _measure_ramp_fwhms(
+    img: np.ndarray,
+    band_top: int,
+    septum: int,
+    band_bot: int,
+    cx: float,
+    R: float,
+    col_spacing_mm: float,
+) -> tuple[float, float, tuple]:
+    """Measure the FWHM of the upper and lower bright ramps inside the
+    insert. Returns ``(top_mm, bot_mm, annotation)`` where ``annotation`` is
+    ``(u_l, u_r, l_l, l_r)`` sub-pixel x positions for the overlay."""
+    x0, x1 = int(cx - 0.55 * R), int(cx + 0.55 * R)
+    up_prof = img[band_top:septum, x0:x1].mean(axis=0)
+    lo_prof = img[septum + 1:band_bot + 1, x0:x1].mean(axis=0)
+    fu, u_l, u_r = _fwhm_with_pos(up_prof, x0)
+    fl, l_l, l_r = _fwhm_with_pos(lo_prof, x0)
+    top_mm = fu * col_spacing_mm
+    bot_mm = fl * col_spacing_mm
+    if top_mm + bot_mm < 1e-6:
+        raise ValueError("Failed to fit ramp FWHM in the slice-thickness insert.")
+    return top_mm, bot_mm, (u_l, u_r, l_l, l_r)
+
+
 def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
     spec = spec or series.spec
     nominal = spec.nominal_slice_thickness_mm
@@ -80,60 +146,11 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         geom = localize_phantom(img)
         cx, cy, R = geom.cx_px, geom.cy_px, geom.radius_px
 
-        # --- 1. Find the slice-thickness void band near the phantom centre ---
-        # The insert is a short horizontal band that is much dimmer than the
-        # surrounding phantom interior. Earlier versions used a global
-        # `bg = median(rprof[rprof > 0])` baseline, which averaged bright
-        # phantom rows with air rows and produced a void threshold so low that
-        # the insert itself sat above it on lower-contrast acquisitions. We
-        # instead measure the bright-phantom level from the top decile of the
-        # column profile *inside* the phantom row range, then require the void
-        # run to be bracketed above and below by bright rows so non-insert
-        # interior features (resolution insert, slice-position bars) don't win.
-        c_lo, c_hi = int(cx - 0.20 * R), int(cx + 0.20 * R)
-        rprof = _smooth(img[:, c_lo:c_hi].mean(axis=1), 3)
-        H = img.shape[0]
-        y0, y1 = max(0, int(cy - R)), min(H, int(cy + R))
-        bright = float(np.percentile(rprof[y0:y1], 90))
-        void_t = bright * 0.50
-        bright_t = bright * 0.80
-        runs = contiguous_runs(rprof < void_t)
-        cand = []
-        for s, e in runs:
-            L = e - s + 1
-            if not (3 <= L <= 20):
-                continue
-            above = rprof[max(0, s - 4):s]
-            below = rprof[e + 1:min(len(rprof), e + 5)]
-            if (above >= bright_t).sum() < 3 or (below >= bright_t).sum() < 3:
-                continue
-            cand.append((abs((s + e) / 2 - cy), s, e))
-        if not cand:
-            raise ValueError("Slice-thickness void band not found near phantom centre.")
-        cand.sort()
-        _, band_top, band_bot = cand[0]
-
-        # --- 2. Find the septum between the two ramp peaks ---
-        cc_lo, cc_hi = int(cx - 0.25 * R), int(cx + 0.25 * R)
-        bright = _smooth(img[band_top:band_bot + 1, cc_lo:cc_hi].mean(axis=1), 3)
-        mid = len(bright) // 2
-        up_peak = int(np.argmax(bright[: mid + 1]))
-        lo_peak = mid + int(np.argmax(bright[mid:]))
-        if lo_peak <= up_peak:
-            lo_peak = min(len(bright) - 1, up_peak + 1)
-        septum = band_top + up_peak + int(np.argmin(bright[up_peak:lo_peak + 1]))
-        septum = min(max(septum, band_top + 1), band_bot - 1)
-
-        # --- 3. Measure each ramp's horizontal FWHM ---
-        x0, x1 = int(cx - 0.55 * R), int(cx + 0.55 * R)
-        up_prof = img[band_top:septum, x0:x1].mean(axis=0)
-        lo_prof = img[septum + 1:band_bot + 1, x0:x1].mean(axis=0)
-        fu, u_l, u_r = _fwhm_with_pos(up_prof, x0)
-        fl, l_l, l_r = _fwhm_with_pos(lo_prof, x0)
-        top_mm = fu * ps[1]
-        bot_mm = fl * ps[1]
-        if top_mm + bot_mm < 1e-6:
-            raise ValueError("Failed to fit ramp FWHM in the slice-thickness insert.")
+        band_top, band_bot = _find_void_band(img, cx, cy, R)
+        septum = _find_septum(img, band_top, band_bot, cx, R)
+        top_mm, bot_mm, (u_l, u_r, l_l, l_r) = _measure_ramp_fwhms(
+            img, band_top, septum, band_bot, cx, R, ps[1],
+        )
 
         thickness_mm = 0.2 * (top_mm * bot_mm) / (top_mm + bot_mm)
 
