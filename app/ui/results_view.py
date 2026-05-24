@@ -21,6 +21,22 @@ from .history import snapshot_run
 # Test IDs that need manual scoring rather than an automated run.
 VISUAL_TEST_IDS = {"high_contrast_resolution", "low_contrast_detectability"}
 
+# Session-state keys for cached annotated images on the manual-scoring tab;
+# kept in lockstep with results so a results clear sweeps these too.
+_VISUAL_IMAGE_CACHE_KEYS = ("_visual_hcr_cache", "_visual_lcd_cache")
+
+
+def clear_results() -> None:
+    """Wipe completed results and any cached visual-test annotations.
+
+    Call from any input handler that invalidates prior numbers (mode flip,
+    slice-role override, phantom/field/sequence change). One place owns
+    the cache-key list so adding a new visual cache stays a single edit.
+    """
+    st.session_state.results = {}
+    for key in _VISUAL_IMAGE_CACHE_KEYS:
+        st.session_state.pop(key, None)
+
 
 _VERDICT_CSS_CLASS = {
     "PASS": "PASS", "FAIL": "FAIL", "REVIEW": "REVIEW",

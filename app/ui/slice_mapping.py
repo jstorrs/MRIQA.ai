@@ -62,9 +62,7 @@ def render(
 
     old_map = {role: series.acr_slice_map.get(role) for role in new_map}
     if old_map != new_map and st.session_state.results:
-        st.session_state.results = {}
-        st.session_state.pop("_visual_hcr_cache", None)
-        st.session_state.pop("_visual_lcd_cache", None)
+        results_view.clear_results()
         st.info("Slice mapping changed; prior results were cleared.")
     series.acr_slice_map = {**series.acr_slice_map, **new_map}
     st.session_state.series = series

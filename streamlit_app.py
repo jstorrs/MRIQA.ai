@@ -169,9 +169,7 @@ test_order = SAGITTAL_TEST_ORDER if analysis_mode == "sagittal" else AXIAL_TEST_
 # Clear results when switching analyses inside the same session (e.g. user
 # picks a different series in the catalog and the mode flips).
 if st.session_state.get("active_mode") != analysis_mode:
-    st.session_state.results = {}
-    st.session_state.pop("_visual_hcr_cache", None)
-    st.session_state.pop("_visual_lcd_cache", None)
+    results_view.clear_results()
     st.session_state.active_mode = analysis_mode
 
 if analysis_mode == "sagittal":

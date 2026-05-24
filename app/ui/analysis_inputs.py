@@ -17,6 +17,7 @@ import streamlit as st
 from ..io_dicom.dicom_loader import DicomSeries
 from ..utils.phantom import detect_phantom_spec
 from ..utils.phantom_spec import LARGE, PHANTOMS
+from . import results_view
 
 
 def detect_sequence_type(tr_ms: float, te_ms: float) -> str:
@@ -103,9 +104,7 @@ def render(
     config_key = f"_analysis_config_{key_prefix}_{series_tag}"
     previous = st.session_state.get(config_key)
     if previous is not None and previous != config and st.session_state.results:
-        st.session_state.results = {}
-        st.session_state.pop("_visual_hcr_cache", None)
-        st.session_state.pop("_visual_lcd_cache", None)
+        results_view.clear_results()
         st.info("Analysis inputs changed; prior results were cleared.")
     st.session_state[config_key] = config
     series.spec = PHANTOMS.get(choice, LARGE)
