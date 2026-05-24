@@ -8,7 +8,6 @@ Deployed: Streamlit Community Cloud points at this file.
 
 from __future__ import annotations
 
-import hmac
 import io
 import sys
 import zipfile
@@ -32,12 +31,15 @@ from app.io_dicom.dicom_loader import (              # noqa: E402
 from app.qa_tests import AXIAL_TEST_ORDER, SAGITTAL_TEST_ORDER  # noqa: E402
 from app.qa_tests import high_contrast_resolution, low_contrast_detectability  # noqa: E402
 from app.qa_tests.base import TestResult, verdict_of  # noqa: E402
-from app.reporting.csv_report import write_csv       # noqa: E402
-from app.reporting.pdf_report import write_pdf       # noqa: E402
 from app.utils.phantom import detect_phantom_spec    # noqa: E402
 from app.utils.phantom_spec import PHANTOMS, LARGE   # noqa: E402
-from app.utils import theme                           # noqa: E402
-from app.utils import viz                             # noqa: E402
+from app.ui import auth, viewer, history, export  # noqa: E402
+from app.ui.badges import (                          # noqa: E402
+    normalize_img as _normalize_img,
+    status_badge as _status_badge,
+    confidence_badge as _confidence_badge,
+)
+from app.ui.history import snapshot_run as _snapshot_run  # noqa: E402
 
 EXPORTS_DIR = _ROOT / "exports"
 EXPORTS_DIR.mkdir(exist_ok=True)
@@ -47,60 +49,6 @@ APP_VERSION = "0.2.0-mvp"
 # --------------------------------------------------------------------------- #
 # Helpers                                                                     #
 # --------------------------------------------------------------------------- #
-
-
-def _configured_password():
-    """Return the shared password from Streamlit secrets, or None if unset."""
-    try:
-        return st.secrets.get("password")
-    except Exception:
-        return None
-
-
-def check_password() -> bool:
-    """Gate the app behind a shared password stored in Streamlit secrets.
-
-    Behaviour:
-      * If no password is configured, the app stays open but shows a loud
-        warning (so the admin is never locked out during setup).
-      * If a password is configured, visitors must enter it once per session.
-    """
-    configured = _configured_password()
-    if not configured:
-        # No password set (e.g. local development). Open access, slim notice.
-        st.caption(
-            "🔓 Open access (no password set). To require a login on the deployed "
-            "app, add a `password` secret in Streamlit Cloud — see DEPLOY.md."
-        )
-        return True
-
-    if st.session_state.get("auth_ok", False):
-        return True
-
-    def _verify():
-        entered = st.session_state.get("auth_pw", "")
-        if hmac.compare_digest(str(entered), str(configured)):
-            st.session_state["auth_ok"] = True
-            st.session_state.pop("auth_pw", None)
-        else:
-            st.session_state["auth_ok"] = False
-
-    st.markdown("#### Sign in")
-    st.text_input("Password", type="password", key="auth_pw", on_change=_verify)
-    if st.session_state.get("auth_ok") is False:
-        st.error("Incorrect password. Please try again.")
-    st.caption(
-        "Access is restricted to pilot testers. Contact the app owner for the password. "
-        "Please upload anonymized ACR phantom DICOMs only — no patient data."
-    )
-    return False
-
-
-def _normalize_img(img: np.ndarray, wl: float | None = None, ww: float | None = None) -> np.ndarray:
-    """uint8 view of an MR image for ``st.image``. Delegates the actual
-    windowing to ``viz.normalize`` so the Streamlit display and the PDF
-    overlays agree pixel-for-pixel."""
-    return (viz.normalize(img, wl=wl, ww=ww) * 255).astype(np.uint8)
 
 
 def _catalog_uploads(uploaded_files) -> list[dict]:
@@ -161,50 +109,6 @@ def _series_label(entry: dict) -> str:
     parts.append(desc)
     parts.append(f"[{entry['modality'] or '?'}, {entry['n_files']} files]")
     return " ".join(parts)
-
-
-def _status_badge(status: str) -> str:
-    """Return a markdown-friendly colored badge for a test status."""
-    color = theme.STATUS_COLORS.get(status, "#cccccc")
-    return (
-        f"<span style='background:{color};color:white;padding:2px 8px;"
-        f"border-radius:10px;font-size:0.78em;font-weight:600;letter-spacing:0.5px;'>"
-        f"{status}</span>"
-    )
-
-
-_CONFIDENCE_LABELS = {"high": "HIGH", "medium": "MEDIUM", "low": "LOW"}
-
-
-def _confidence_badge(conf: str) -> str:
-    """Return a markdown-friendly colored badge for detection confidence."""
-    label = _CONFIDENCE_LABELS.get(conf, "—")
-    color = theme.CONFIDENCE_COLORS.get(label, "#cccccc")
-    return (
-        f"<span style='background:white;color:{color};border:1px solid {color};"
-        f"padding:1px 8px;border-radius:10px;font-size:0.74em;font-weight:600;"
-        f"letter-spacing:0.5px;'>confidence: {label}</span>"
-    )
-
-
-def _snapshot_run(series: DicomSeries, results: dict[str, TestResult]) -> dict:
-    """Build a serializable-ish snapshot of a completed run for in-session history."""
-    md = series.metadata
-    verdict, counts = verdict_of(results.values())
-    return {
-        "id": datetime.now().strftime("%Y%m%d_%H%M%S"),
-        "datetime": datetime.now().isoformat(timespec="seconds"),
-        "scanner": f"{md.manufacturer} {md.model}".strip(),
-        "field_strength": md.field_strength_t,
-        "patient_id": md.patient_id,
-        "series_description": md.series_description,
-        "sequence": md.sequence,
-        "n_slices": md.n_slices,
-        "verdict": verdict,
-        "counts": counts,
-        "results": results,    # kept in-memory only; not serialized to disk
-        "series": series,
-    }
 
 
 def _switch_tab(label: str) -> None:
@@ -271,7 +175,7 @@ st.markdown(
 st.title("MRIQA.ai — ACR Phantom QA")
 
 # ---- Password gate (shared password via Streamlit secrets) ---------------- #
-if not check_password():
+if not auth.check_password():
     st.stop()
 
 st.caption(
@@ -585,40 +489,7 @@ if _pending:
 
 # ----- Viewer ----------------------------------------------------------- #
 with tab_viewer:
-    st.subheader("Slice viewer")
-    n = md.n_slices
-
-    # Volume-wide auto window so the same level/width applies to ALL slices
-    # (like a standard DICOM viewer) instead of resetting per slice.
-    vol = series.pixel_array
-    auto_wl = round(float(np.nanmean(vol)), 1) if vol.size else 0.0
-    auto_ww = round(float(max(1.0, np.nanstd(vol) * 4 + 1)), 1) if vol.size else 1.0
-    if "view_wl" not in st.session_state:
-        st.session_state.view_wl = auto_wl
-    if "view_ww" not in st.session_state:
-        st.session_state.view_ww = auto_ww
-
-    def _reset_window():
-        st.session_state.view_wl = auto_wl
-        st.session_state.view_ww = auto_ww
-
-    if n <= 1:
-        idx = 1
-        st.info("Series has only one slice; slider disabled.")
-    else:
-        idx = st.slider("Slice index (1-based)", 1, n, 1)
-
-    cwl, cww, cbtn = st.columns([2, 2, 1])
-    cwl.number_input("Window level", key="view_wl", step=10.0)
-    cww.number_input("Window width", key="view_ww", min_value=1.0, step=10.0)
-    with cbtn:
-        st.markdown("<div style='height:1.7em'></div>", unsafe_allow_html=True)
-        st.button("Auto", on_click=_reset_window, width="stretch",
-                  help="Reset window to the auto level/width for this series.")
-    st.caption("Window level/width applies to all slices as you scroll.")
-
-    img = _normalize_img(vol[idx - 1], wl=st.session_state.view_wl, ww=st.session_state.view_ww)
-    st.image(img, caption=f"Slice {idx} of {n}", width=560)
+    viewer.render(series)
 
 _VISUAL_TEST_IDS = {"high_contrast_resolution", "low_contrast_detectability"}
 
@@ -1116,38 +987,7 @@ if tab_manual is not None:
 
 # ----- History (in-browser-session) ------------------------------------- #
 with tab_history:
-    st.subheader("Past QA runs (this browser session)")
-    st.caption(
-        "History is in-memory and lives only as long as this browser tab. "
-        "Use the Export tab to save permanent PDFs."
-    )
-    if not st.session_state.history:
-        st.info("Save a run from the Results tab to populate history.")
-    else:
-        for i, s in enumerate(reversed(st.session_state.history)):
-            with st.expander(
-                f"{s['datetime']} · {s['scanner'] or '—'} · "
-                f"{s['sequence']} · {s['verdict']}",
-                expanded=False,
-            ):
-                a, b, c, d, e = st.columns(5)
-                a.metric("Verdict", s["verdict"])
-                b.metric("Pass", s["counts"]["PASS"])
-                c.metric("Fail", s["counts"]["FAIL"])
-                d.metric("Review", s["counts"]["REVIEW"])
-                e.metric("Error", s["counts"]["ERROR"])
-                st.markdown(
-                    f"<span class='mri-small'>"
-                    f"Patient/Phantom ID: {s['patient_id'] or '—'} · "
-                    f"Series: {s['series_description'] or '—'} · "
-                    f"Slices: {s['n_slices']}"
-                    f"</span>",
-                    unsafe_allow_html=True,
-                )
-                if st.button("Re-open this run", key=f"reopen_{i}"):
-                    st.session_state.series = s["series"]
-                    st.session_state.results = dict(s["results"])
-                    st.rerun()
+    history.render()
 
 # ----- Validation (testing mode) --------------------------------------- #
 with tab_validation:
@@ -1327,33 +1167,4 @@ with tab_validation:
 
 # ----- Export ----------------------------------------------------------- #
 with tab_export:
-    st.subheader("Export QA report")
-    if not st.session_state.results:
-        st.info("Run the QA tests first.")
-    else:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        stamp = f"{md.patient_id or 'phantom'}_{md.series_description or 'series'}_{ts}".replace(" ", "_")
-        pdf_path = EXPORTS_DIR / f"QAreport_{stamp}.pdf"
-        csv_path = EXPORTS_DIR / f"QAreport_{stamp}.csv"
-        results_list = [st.session_state.results[t[0]] for t in test_order if t[0] in st.session_state.results]
-
-        cgen, _ = st.columns([1, 3])
-        if cgen.button("Generate PDF + CSV", type="primary"):
-            try:
-                write_pdf(pdf_path, series, results_list, app_version=APP_VERSION)
-                write_csv(csv_path, series, results_list)
-                st.success("Report generated.")
-            except Exception as exc:
-                st.error(f"Export failed: {exc}")
-
-        if pdf_path.exists():
-            with open(pdf_path, "rb") as f:
-                st.download_button(
-                    "Download PDF report", f, file_name=pdf_path.name,
-                    mime="application/pdf", type="primary",
-                )
-        if csv_path.exists():
-            with open(csv_path, "rb") as f:
-                st.download_button(
-                    "Download CSV data", f, file_name=csv_path.name, mime="text/csv",
-                )
+    export.render(series, test_order, EXPORTS_DIR, APP_VERSION)
