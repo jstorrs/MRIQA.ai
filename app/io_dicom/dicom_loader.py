@@ -280,16 +280,23 @@ def load_series(sources: Iterable) -> DicomSeries:
         discarded_echo_times = sorted(te for te in echo_groups if te != kept_te)
         datasets = echo_groups[kept_te]
 
-    # Sort: prefer InstanceNumber; fallback to SliceLocation (descending so
-    # superior slices come first, then we reverse if needed).
+    # Sort: prefer InstanceNumber, fall back to SliceLocation, then to
+    # insertion order. The first tuple element bands by source-of-truth so
+    # InstanceNumber-tagged datasets always precede SliceLocation-tagged
+    # ones — never interleaved — and untagged datasets land at the end in
+    # the order they arrived.
+    _BY_INSTANCE_NUMBER = 0
+    _BY_SLICE_LOCATION = 1
+    _UNTAGGED = 2
+
     def sort_key(ds):
         inst = getattr(ds, "InstanceNumber", None)
         if inst is not None:
-            return (0, int(inst))
+            return (_BY_INSTANCE_NUMBER, int(inst))
         sl = getattr(ds, "SliceLocation", None)
         if sl is not None:
-            return (1, float(sl))
-        return (2, 0)
+            return (_BY_SLICE_LOCATION, float(sl))
+        return (_UNTAGGED, 0)
 
     datasets.sort(key=sort_key)
 
