@@ -26,17 +26,12 @@ from app.io_dicom.dicom_loader import (              # noqa: E402
     validate_series,
 )
 from app.qa_tests import AXIAL_TEST_ORDER, SAGITTAL_TEST_ORDER  # noqa: E402
-from app.qa_tests import high_contrast_resolution, low_contrast_detectability  # noqa: E402
-from app.qa_tests.base import TestResult, verdict_of  # noqa: E402
-from app.utils.phantom import detect_phantom_spec    # noqa: E402
-from app.utils.phantom_spec import PHANTOMS, LARGE   # noqa: E402
-from app.ui import auth, viewer, history, export, uploads, validation  # noqa: E402
-from app.ui.badges import (                          # noqa: E402
-    normalize_img as _normalize_img,
-    status_badge as _status_badge,
-    confidence_badge as _confidence_badge,
+from app.qa_tests.base import TestResult  # noqa: E402
+from app.ui import (                                  # noqa: E402
+    analysis_inputs, auth, badges, export, history, manual_scoring,
+    results_view, uploads, validation, viewer,
 )
-from app.ui.history import snapshot_run as _snapshot_run  # noqa: E402
+from app.ui.badges import normalize_img                # noqa: E402
 
 EXPORTS_DIR = _ROOT / "exports"
 EXPORTS_DIR.mkdir(exist_ok=True)
@@ -120,13 +115,6 @@ st.caption(
     "**Not a medical device. Not for diagnostic use.** "
     "Thresholds from the ACR Large and Medium Phantom Test Guidance (Oct 2022)."
 )
-
-# --------------------------------------------------------------------------- #
-# Sidebar — uploader + guidance                                               #
-# --------------------------------------------------------------------------- #
-
-_PHANTOM_OPTIONS = [(s.short_name, s.name) for s in PHANTOMS.values()]
-
 
 # --------------------------------------------------------------------------- #
 # Session state init                                                          #
@@ -236,7 +224,7 @@ if series is None:
         for s in reversed(st.session_state.history):
             st.markdown(
                 f"- **{s['datetime']}** · {s['scanner']} · "
-                f"{s['sequence']} · {_status_badge(s['verdict'])} "
+                f"{s['sequence']} · {badges.status_badge(s['verdict'])} "
                 f"(pass {s['counts']['PASS']} · fail {s['counts']['FAIL']} · "
                 f"review {s['counts']['REVIEW']})",
                 unsafe_allow_html=True,
@@ -330,256 +318,6 @@ if _pending:
 with tab_viewer:
     viewer.render(series)
 
-_VISUAL_TEST_IDS = {"high_contrast_resolution", "low_contrast_detectability"}
-
-
-def _detect_sequence_type(tr_ms: float, te_ms: float) -> str:
-    """Classify an ACR phantom acquisition as T1 or T2 from TR/TE.
-
-    The ACR axial protocol nominates TR≈500 / TE≈20 for T1 and
-    TR≈2000 / TE≈80 for T2, so TE alone is a clean separator. TR is
-    used as a tiebreaker when TE is missing.
-    """
-    if te_ms and te_ms > 0:
-        return "T2" if te_ms >= 40.0 else "T1"
-    if tr_ms and tr_ms > 0:
-        return "T2" if tr_ms >= 1000.0 else "T1"
-    return "T1"
-
-
-def _render_analysis_inputs(series, *, key_prefix: str, show_sequence: bool = True):
-    """Render the phantom + field-strength (+ sequence, axial only) inputs at
-    the top of an Analysis tab and apply them to `series` in place. Defaults
-    are detected per-series — phantom from the segmented left-right width
-    (robust to A-P bubbles; also valid on a sagittal scout where the axial
-    circumference runs L-R), field strength from the DICOM tag snapped to
-    1.5 / 3.0 T, sequence from TR / TE.
-
-    The widget keys are suffixed with the loaded series UID so picking a
-    different series re-mounts the dropdowns with fresh detected defaults
-    via `index=`. User overrides within the same series persist because the
-    key stays stable across reruns of that series. This avoids the Streamlit
-    quirk where pre-render assignment to `st.session_state[widget_key]` is
-    not honored once the widget has already been instantiated under that key
-    in a prior run.
-
-    `key_prefix` keeps the keys unique when the same controls render on more
-    than one tab body within a single run.
-    """
-    series_uid = st.session_state.get("loaded_series_uid") or str(id(series))
-    series_tag = "".join(c if c.isalnum() else "_" for c in str(series_uid))[-32:]
-
-    idx0 = series.acr_slice_map.get(1, 0)
-    spec_auto, _ = detect_phantom_spec(
-        series.pixel_array[idx0], series.metadata.pixel_spacing_mm,
-    )
-    detected_phantom = spec_auto.short_name
-    b0 = series.metadata.field_strength_t
-    detected_field = "3.0 T" if b0 >= 2.0 else "1.5 T"
-    detected_sequence = _detect_sequence_type(
-        series.metadata.repetition_time_ms, series.metadata.echo_time_ms,
-    )
-
-    phantom_options = [opt[0] for opt in _PHANTOM_OPTIONS]
-    field_options = ["1.5 T", "3.0 T"]
-    sequence_options = ["T1", "T2"]
-
-    cols = st.columns(3 if show_sequence else 2)
-    with cols[0]:
-        choice = st.selectbox(
-            "ACR phantom model",
-            options=phantom_options,
-            format_func=lambda k: dict(_PHANTOM_OPTIONS)[k],
-            index=phantom_options.index(detected_phantom),
-            key=f"{key_prefix}_phantom_{series_tag}",
-            help="Pre-selected from the phantom's segmented left-right width. "
-                 "Large = 190 mm Ø / 148 mm S-I; Medium = 165 mm Ø / 134 mm S-I.",
-        )
-    with cols[1]:
-        fld = st.selectbox(
-            "Scanner field strength",
-            options=field_options,
-            index=field_options.index(detected_field),
-            key=f"{key_prefix}_field_{series_tag}",
-            help="Pre-selected from the DICOM MagneticFieldStrength tag "
-                 "(snapped to the nearest of 1.5 / 3.0 T).",
-        )
-    if show_sequence:
-        with cols[2]:
-            seq = st.selectbox(
-                "Axial sequence",
-                options=sequence_options,
-                index=sequence_options.index(detected_sequence),
-                key=f"{key_prefix}_sequence_{series_tag}",
-                help="Pre-selected from TR / TE (T2 when TE ≥ 40 ms). At 1.5 T "
-                     "the ACR LCD threshold is sequence-dependent: 30 spokes "
-                     "for T1, 25 for T2.",
-            )
-        series.metadata.sequence = seq
-
-    series.spec = PHANTOMS.get(choice, LARGE)
-    series.metadata.field_strength_t = 1.5 if fld == "1.5 T" else 3.0
-
-
-def _render_results_view(test_order, analysis_mode, series, *,
-                         key_prefix: str, scope: str = "all"):
-    """Render the verdict banner + summary table + per-test details, and
-    (when `scope="all"`) a save-to-history button. `scope` controls which
-    subset of tests is shown:
-
-      - ``"automated"`` — non-visual tests only. Used inline on the Analysis
-        tab so the user sees what the automated run produced without empty
-        REVIEW rows for un-scored visual tests.
-      - ``"manual"`` — visual tests only. Used inline on the Manual scoring
-        tab so the saved HCR / LCD rows appear right after Save.
-      - ``"all"`` — every test. Used on the Results tab and on the sagittal
-        Analysis tab (which IS the only results surface in sagittal mode).
-
-    The verdict is computed over the displayed subset, so the Analysis tab
-    can show PASS without being held back by un-scored visuals. The
-    save-to-history button only renders for ``scope="all"`` to keep the
-    primary "I'm done" action on Results.
-    """
-    if scope == "automated":
-        displayed_order = [t for t in test_order if t[0] not in _VISUAL_TEST_IDS]
-    elif scope == "manual":
-        displayed_order = [t for t in test_order if t[0] in _VISUAL_TEST_IDS]
-    else:
-        displayed_order = list(test_order)
-
-    displayed_ids = {tid for tid, _, _ in displayed_order}
-    displayed_results = {
-        tid: r for tid, r in st.session_state.results.items() if tid in displayed_ids
-    }
-
-    # Pending-visual nudge: useful whenever the view spans the manual subset
-    # ("automated" → your next step is Manual; "all" → you still have manual
-    # to score). On the manual tab itself the hint would be redundant.
-    if analysis_mode == "axial" and scope != "manual":
-        visual_pending = [
-            tid for tid in _VISUAL_TEST_IDS
-            if tid not in st.session_state.results
-        ]
-        automated_failed = any(
-            r.status_text() == "FAIL"
-            for tid, r in st.session_state.results.items()
-            if tid not in _VISUAL_TEST_IDS
-        )
-        if visual_pending and not automated_failed:
-            st.info(
-                "Automated tests are in. Visual scoring (high-contrast "
-                "resolution + low-contrast detectability) is still pending — "
-                "open the **Manual scoring** tab to score them when ready."
-            )
-        elif visual_pending and automated_failed:
-            st.warning(
-                "One or more automated tests **failed**. Manual scoring is "
-                "usually not worth doing until the underlying acquisition / "
-                "calibration issue is resolved — but it's available on the "
-                "**Manual scoring** tab if you need a complete report."
-            )
-
-    verdict, counts = verdict_of(displayed_results.values())
-    verdict_cls = {
-        "PASS": "PASS", "FAIL": "FAIL", "REVIEW": "REVIEW",
-        "ERROR": "ERROR", "—": "dash",
-    }[verdict]
-    st.markdown(
-        f"""
-        <div class='mri-banner mri-banner-{verdict_cls}'>
-          <div style='font-size:1.05em; font-weight:600;'>
-            Overall verdict: {_status_badge(verdict)}
-          </div>
-          <div class='mri-small' style='margin-top:4px;'>
-            {counts['PASS']} pass · {counts['FAIL']} fail · {counts['REVIEW']} review · {counts['ERROR']} error
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    rows = []
-    for tid, _, _ in displayed_order:
-        r: TestResult | None = st.session_state.results.get(tid)
-        if r is None:
-            rows.append({"Test": tid, "Status": "—", "Confidence": "—", "Detail": ""})
-            continue
-        key = r.measurements[0] if r.measurements else None
-        rows.append({
-            "Test": r.test_name,
-            "Status": r.status_text(),
-            "Confidence": r.confidence_label(),
-            "Detail": (f"{key.label}: {key.value} {key.unit}" if key else "") + (
-                f" · spec {key.spec}" if key and key.spec else ""
-            ),
-            "Error": r.error or "",
-        })
-    st.dataframe(rows, hide_index=True, width="stretch")
-
-    st.markdown("### Per-test details")
-    for tid, label, _ in displayed_order:
-        r: TestResult | None = st.session_state.results.get(tid)
-        if r is None:
-            continue
-        title = f"{r.test_name} — {r.status_text()}"
-        with st.expander(title, expanded=(r.status_text() in ("FAIL", "ERROR") or r.confidence != "high")):
-            st.markdown(
-                f"{_status_badge(r.status_text())} &nbsp; {_confidence_badge(r.confidence)}",
-                unsafe_allow_html=True,
-            )
-            if r.warnings:
-                for w in r.warnings:
-                    st.warning(w)
-            if r.error:
-                st.error(r.error)
-            if r.notes:
-                st.caption(r.notes)
-            if r.measurements:
-                st.dataframe(
-                    [{"Measurement": m.label, "Value": m.value, "Unit": m.unit,
-                      "Spec": m.spec,
-                      "Pass": "" if m.passed is None else ("✓" if m.passed else "✗")}
-                     for m in r.measurements],
-                    hide_index=True, width="stretch",
-                )
-            if r.annotated_images:
-                img_cols = st.columns(min(2, len(r.annotated_images)))
-                for i, (cap, im) in enumerate(r.annotated_images):
-                    with img_cols[i % len(img_cols)]:
-                        st.image(im, caption=cap, width="stretch")
-
-    if scope == "all":
-        st.divider()
-        if st.button("Save this run to History", key=f"{key_prefix}_save_history"):
-            snap = _snapshot_run(series, dict(st.session_state.results))
-            st.session_state.history.append(snap)
-            st.success(f"Snapshot saved — {len(st.session_state.history)} run(s) in this session.")
-
-
-def _run_automated_tests(series, test_order):
-    """Run every test in test_order that is not a manual/visual scoring test.
-
-    Manual tests (HCR, LCD) live on the Manual scoring tab and are not
-    touched here. Returns a dict ready to merge into st.session_state.results.
-    """
-    out: dict[str, TestResult] = {}
-    automated = [
-        (tid, label, mod) for (tid, label, mod) in test_order
-        if tid not in _VISUAL_TEST_IDS
-    ]
-    prog = st.progress(0, text="Running automated tests...")
-    for i, (tid, label, mod) in enumerate(automated):
-        prog.progress((i + 1) / max(1, len(automated)),
-                      text=f"Running {label}...")
-        try:
-            out[tid] = mod.run(series, spec=series.spec)
-        except Exception as e:
-            out[tid] = TestResult(
-                test_id=tid, test_name=label, automated=True,
-                passed=None, error=str(e),
-            )
-    prog.empty()
-    return out
 
 
 # ----- Analysis (axial: slice mapping + automated run) ----------------- #
@@ -591,7 +329,7 @@ if tab_slices is not None:
             "input to the algorithms. The dropdowns are pre-selected from the "
             "loaded series — change them only if the defaults are wrong."
         )
-        _render_analysis_inputs(series, key_prefix="axial_inputs")
+        analysis_inputs.render(series, key_prefix="axial_inputs")
 
         st.divider()
         st.subheader("ACR slice role mapping")
@@ -612,7 +350,7 @@ if tab_slices is not None:
                     value=min(int(cur) + 1, md.n_slices), step=1,
                 )
                 new_map[role] = int(v) - 1
-                preview = _normalize_img(series.pixel_array[int(v) - 1])
+                preview = normalize_img(series.pixel_array[int(v) - 1])
                 st.image(preview, caption=f"Physical slice {int(v)}", width=180)
 
         if len(set(new_map.values())) < 4:
@@ -632,7 +370,7 @@ if tab_slices is not None:
         )
         if st.button("Run all automated tests", type="primary"):
             results: dict[str, TestResult] = dict(st.session_state.results)
-            results.update(_run_automated_tests(series, test_order))
+            results.update(results_view.run_automated_tests(series, test_order))
             st.session_state.results = results
             st.rerun()
 
@@ -640,7 +378,7 @@ if tab_slices is not None:
         # surfaces them on the same tab that hosts the Run button.
         if st.session_state.results:
             st.divider()
-            _render_results_view(test_order, analysis_mode, series,
+            results_view.render(test_order, analysis_mode, series,
                                  key_prefix="slice_run_tab",
                                  scope="automated")
 
@@ -658,7 +396,7 @@ with tab_results:
             "to the algorithm. The dropdowns are pre-selected from the loaded "
             "series — change them only if the defaults are wrong."
         )
-        _render_analysis_inputs(series, key_prefix="sagittal_inputs",
+        analysis_inputs.render(series, key_prefix="sagittal_inputs",
                                 show_sequence=False)
 
         st.divider()
@@ -675,7 +413,7 @@ with tab_results:
                 min_value=1, max_value=max(1, md.n_slices),
                 value=1, step=1, key="sagittal_image_index",
             )
-            _sag_preview = _normalize_img(series.pixel_array[int(sag_idx) - 1])
+            _sag_preview = normalize_img(series.pixel_array[int(sag_idx) - 1])
             st.image(_sag_preview, caption=f"Physical slice {int(sag_idx)}", width=180)
 
         st.divider()
@@ -704,125 +442,13 @@ with tab_results:
         else:
             st.info("Press **Run S-I length test** above.")
     else:
-        _render_results_view(test_order, analysis_mode, series,
+        results_view.render(test_order, analysis_mode, series,
                              key_prefix="results_tab")
 
 # ----- Manual scoring (axial only) ------------------------------------- #
 if tab_manual is not None:
     with tab_manual:
-        st.subheader("Visual / manual scoring")
-        st.info(
-            "**Two ACR tests are visual** — High-Contrast Spatial Resolution and "
-            "Low-Contrast Object Detectability. The ACR manual defines these as "
-            "human-judged tests, so the app shows you the correctly-located "
-            "images and you record what you see. They stay at status REVIEW "
-            "until you score and save."
-        )
-
-        automated_results = {
-            tid: r for tid, r in st.session_state.results.items()
-            if tid not in _VISUAL_TEST_IDS
-        }
-        if automated_results and any(r.status_text() == "FAIL" for r in automated_results.values()):
-            st.warning(
-                "One or more automated tests **failed**. Manual scoring is "
-                "usually a waste of time on a series with a clear acquisition "
-                "or calibration problem — fix the upstream issue first unless "
-                "you need a complete report."
-            )
-
-        st.markdown("### High-contrast resolution")
-        st.caption("On slice 1, look at the UL and LR hole arrays in the zoomed crops below.")
-        _series_key = id(series)
-        _hcr_existing = st.session_state.results.get("high_contrast_resolution")
-        if _hcr_existing is not None and _hcr_existing.annotated_images:
-            _hcr_images = _hcr_existing.annotated_images
-        else:
-            _hcr_cache = st.session_state.get("_visual_hcr_cache")
-            if _hcr_cache is None or _hcr_cache[0] != _series_key:
-                _hcr_images = high_contrast_resolution.run(series, spec=series.spec).annotated_images
-                st.session_state["_visual_hcr_cache"] = (_series_key, _hcr_images)
-            else:
-                _hcr_images = _hcr_cache[1]
-        for _cap, _im in _hcr_images:
-            st.image(_im, caption=_cap, width="stretch")
-        # Drop sizes the detector didn't actually see (older Large phantoms
-        # have three grids; the spec also lists 0.8 mm for the four-grid
-        # variant, which would be a nonsense choice on a three-grid scan).
-        res_sizes = high_contrast_resolution.detect_present_sizes(
-            series, spec=series.spec,
-        )
-        if not res_sizes:
-            res_sizes = list(series.spec.resolution_array_sizes_mm)
-        res_default_idx = (
-            res_sizes.index(series.spec.resolution_pass_threshold_mm)
-            if series.spec.resolution_pass_threshold_mm in res_sizes
-            else len(res_sizes) // 2
-        )
-        cspec, cul, clr = st.columns(3)
-        threshold = cspec.selectbox("Required smallest row (mm)", res_sizes, index=res_default_idx)
-        ul = cul.selectbox("UL smallest resolvable",
-                           [None, *res_sizes],
-                           format_func=lambda x: "—" if x is None else f"{x} mm")
-        lr = clr.selectbox("LR smallest resolvable",
-                           [None, *res_sizes],
-                           format_func=lambda x: "—" if x is None else f"{x} mm")
-        if st.button("Save resolution scoring"):
-            res = high_contrast_resolution.run(
-                series, spec=series.spec,
-                user_input={"UL": ul, "LR": lr, "spec": threshold},
-            )
-            st.session_state.results["high_contrast_resolution"] = res
-            st.success("Saved.")
-
-        st.divider()
-
-        lcd_slices = series.spec.lcd_slices
-        lcd_range_label = f"{lcd_slices[0]}–{lcd_slices[-1]}"
-        st.markdown("### Low-contrast object detectability")
-        st.caption(f"Count complete spokes visible on each of slices {lcd_range_label}.")
-        _lcd_existing = st.session_state.results.get("low_contrast_detectability")
-        if _lcd_existing is not None and _lcd_existing.annotated_images:
-            _lcd_images = _lcd_existing.annotated_images
-        else:
-            _lcd_cache = st.session_state.get("_visual_lcd_cache")
-            if _lcd_cache is None or _lcd_cache[0] != _series_key:
-                _lcd_images = low_contrast_detectability.run(series, spec=series.spec).annotated_images
-                st.session_state["_visual_lcd_cache"] = (_series_key, _lcd_images)
-            else:
-                _lcd_images = _lcd_cache[1]
-        if _lcd_images:
-            _img_cols = st.columns(min(len(_lcd_images), 4))
-            for i, (_cap, _im) in enumerate(_lcd_images):
-                with _img_cols[i % len(_img_cols)]:
-                    st.image(_im, caption=_cap, width="stretch")
-        with st.form("lcd_scoring_form", clear_on_submit=False):
-            cs = st.columns(len(lcd_slices))
-            spoke_counts: dict[int, int] = {}
-            for col, s in zip(cs, lcd_slices):
-                with col:
-                    spoke_counts[s] = st.number_input(
-                        f"Slice {s} spokes", min_value=0, max_value=10, value=0, step=1,
-                        key=f"lcd_spokes_{s}",
-                    )
-            _lcd_submitted = st.form_submit_button("Save LCD scoring")
-        if _lcd_submitted:
-            res = low_contrast_detectability.run(
-                series, spec=series.spec, user_input=spoke_counts,
-            )
-            st.session_state.results["low_contrast_detectability"] = res
-            st.success("Saved.")
-
-        # Show just the manual results inline once at least one visual test
-        # has been scored. The full automated+manual roll-up lives on Results.
-        manual_done = any(
-            tid in _VISUAL_TEST_IDS for tid in st.session_state.results
-        )
-        if manual_done:
-            st.divider()
-            _render_results_view(test_order, analysis_mode, series,
-                                 key_prefix="manual_tab",
-                                 scope="manual")
+        manual_scoring.render(series, test_order, analysis_mode)
 
 # ----- History (in-browser-session) ------------------------------------- #
 with tab_history:
