@@ -31,7 +31,7 @@ from app.io_dicom.dicom_loader import (              # noqa: E402
 )
 from app.qa_tests import AXIAL_TEST_ORDER, SAGITTAL_TEST_ORDER  # noqa: E402
 from app.qa_tests import high_contrast_resolution, low_contrast_detectability  # noqa: E402
-from app.qa_tests.base import TestResult             # noqa: E402
+from app.qa_tests.base import TestResult, verdict_of  # noqa: E402
 from app.reporting.csv_report import write_csv       # noqa: E402
 from app.reporting.pdf_report import write_pdf       # noqa: E402
 from app.utils.phantom import detect_phantom_spec    # noqa: E402
@@ -199,28 +199,10 @@ def _confidence_badge(conf: str) -> str:
     )
 
 
-def _overall_status(results: dict[str, TestResult]) -> tuple[str, dict]:
-    """Roll up per-test statuses into an overall verdict and counts."""
-    counts = {"PASS": 0, "FAIL": 0, "REVIEW": 0, "ERROR": 0}
-    for r in results.values():
-        counts[r.status_text()] = counts.get(r.status_text(), 0) + 1
-    if counts["FAIL"] > 0:
-        verdict = "FAIL"
-    elif counts["ERROR"] > 0:
-        verdict = "ERROR"
-    elif counts["REVIEW"] > 0:
-        verdict = "REVIEW"
-    elif counts["PASS"] > 0:
-        verdict = "PASS"
-    else:
-        verdict = "—"
-    return verdict, counts
-
-
 def _snapshot_run(series: DicomSeries, results: dict[str, TestResult]) -> dict:
     """Build a serializable-ish snapshot of a completed run for in-session history."""
     md = series.metadata
-    verdict, counts = _overall_status(results)
+    verdict, counts = verdict_of(results.values())
     return {
         "id": datetime.now().strftime("%Y%m%d_%H%M%S"),
         "datetime": datetime.now().isoformat(timespec="seconds"),
@@ -799,7 +781,7 @@ def _render_results_view(test_order, analysis_mode, series, *,
                 "**Manual scoring** tab if you need a complete report."
             )
 
-    verdict, counts = _overall_status(displayed_results)
+    verdict, counts = verdict_of(displayed_results.values())
     verdict_cls = {
         "PASS": "PASS", "FAIL": "FAIL", "REVIEW": "REVIEW",
         "ERROR": "ERROR", "—": "dash",
@@ -1272,7 +1254,7 @@ with tab_validation:
         notes = st.text_area("Notes / observations for this dataset", value="", height=80)
 
         if st.button("Add to validation log", type="primary"):
-            verdict, counts = _overall_status(st.session_state.results)
+            verdict, counts = verdict_of(st.session_state.results.values())
             row = {
                 "logged_at":       datetime.now().isoformat(timespec="seconds"),
                 "dataset":         ds_name,

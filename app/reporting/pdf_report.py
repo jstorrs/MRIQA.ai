@@ -19,7 +19,6 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
 
 from PIL import Image
 from reportlab.lib import colors
@@ -32,7 +31,7 @@ from reportlab.platypus import (
 )
 
 from ..io_dicom.dicom_loader import DicomSeries
-from ..qa_tests.base import TestResult
+from ..qa_tests.base import TestResult, verdict_of
 
 
 _STATUS_COLOR = {
@@ -69,23 +68,6 @@ def _pil_to_flowable(pil_img: Image.Image, max_w_in: float = 3.4) -> RLImage:
     aspect = h / w
     width = max_w_in * inch
     return RLImage(buf, width=width, height=width * aspect)
-
-
-def _overall_verdict(results: Iterable[TestResult]) -> tuple[str, dict]:
-    counts = {"PASS": 0, "FAIL": 0, "REVIEW": 0, "ERROR": 0}
-    for r in results:
-        counts[r.status_text()] = counts.get(r.status_text(), 0) + 1
-    if counts["FAIL"]:
-        verdict = "FAIL"
-    elif counts["ERROR"]:
-        verdict = "ERROR"
-    elif counts["REVIEW"]:
-        verdict = "REVIEW"
-    elif counts["PASS"]:
-        verdict = "PASS"
-    else:
-        verdict = "—"
-    return verdict, counts
 
 
 def _signature(payload: dict, secret: str | None = None) -> str:
@@ -233,8 +215,7 @@ def _summary_table(results: list[TestResult]) -> Table:
             key = f"{m.label}: {m.value} {m.unit}".strip()
             if m.spec:
                 key += f"   (spec {m.spec})"
-        conf = getattr(r, "confidence_label", lambda: "HIGH")()
-        rows.append([str(i), r.test_name, r.status_text(), conf, key])
+        rows.append([str(i), r.test_name, r.status_text(), r.confidence_label(), key])
     tbl = Table(rows, colWidths=[0.35 * inch, 2.5 * inch, 0.8 * inch, 0.8 * inch, 2.9 * inch])
     style = [
         ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 9),
@@ -254,7 +235,7 @@ def _summary_table(results: list[TestResult]) -> Table:
         c = _STATUS_COLOR.get(r.status_text(), colors.black)
         style.append(("TEXTCOLOR", (2, i), (2, i), c))
         style.append(("FONT", (2, i), (2, i), "Helvetica-Bold", 9))
-        conf_label = getattr(r, "confidence_label", lambda: "HIGH")()
+        conf_label = r.confidence_label()
         cc = conf_color.get(conf_label, INK)
         style.append(("TEXTCOLOR", (3, i), (3, i), cc))
         style.append(("FONT", (3, i), (3, i), "Helvetica-Bold", 9))
@@ -293,7 +274,7 @@ def write_pdf(
     app_version: str = "0.0.0",
 ) -> Path:
     path = Path(path)
-    verdict, counts = _overall_verdict(results)
+    verdict, counts = verdict_of(results)
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # Tamper-evident signature
@@ -356,13 +337,12 @@ def write_pdf(
             f"<font color='{c.hexval()}'><b>{r.test_name}</b></font>"
             f" &nbsp;<font size='10' color='{GREY.hexval()}'>— {status}</font>"
             f" &nbsp;<font size='9' color='{GREY.hexval()}'>"
-            f"(confidence: {getattr(r, 'confidence_label', lambda: 'HIGH')()})</font>",
+            f"(confidence: {r.confidence_label()})</font>",
             ParagraphStyle("h", parent=h2, fontSize=14, leading=18),
         ))
         # Warnings, if any
-        warnings = getattr(r, "warnings", None) or []
-        if warnings:
-            warning_html = "<br/>".join(f"• {w}" for w in warnings)
+        if r.warnings:
+            warning_html = "<br/>".join(f"• {w}" for w in r.warnings)
             story.append(Paragraph(
                 f"<font color='{_STATUS_COLOR['REVIEW'].hexval()}'><b>Detection warnings:</b></font><br/>{warning_html}",
                 body,

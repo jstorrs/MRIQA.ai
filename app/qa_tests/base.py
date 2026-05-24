@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Iterator, Literal, Optional
+from typing import Iterable, Iterator, Literal, Optional
 
 from PIL import Image
 
@@ -132,3 +132,23 @@ class TestResult:
                 f"exceeds {big_deviation}{unit_str}.{suffix}",
                 severity="medium",
             )
+
+
+def verdict_of(results: Iterable[TestResult]) -> tuple[str, dict[str, int]]:
+    """Roll a collection of TestResults up into an overall verdict + counts.
+
+    Priority order is FAIL > ERROR > REVIEW > PASS; an empty collection
+    returns the em-dash sentinel used by the UI and PDF report.
+    """
+    counts = {"PASS": 0, "FAIL": 0, "REVIEW": 0, "ERROR": 0}
+    for r in results:
+        counts[r.status_text()] += 1
+    if counts["FAIL"]:
+        return "FAIL", counts
+    if counts["ERROR"]:
+        return "ERROR", counts
+    if counts["REVIEW"]:
+        return "REVIEW", counts
+    if counts["PASS"]:
+        return "PASS", counts
+    return "—", counts

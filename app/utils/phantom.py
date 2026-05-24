@@ -51,7 +51,9 @@ def localize_phantom(image: np.ndarray, fill_holes: bool = True) -> PhantomGeome
 
     try:
         t = threshold_otsu(img)
-    except Exception:
+    except ValueError:
+        # threshold_otsu raises ValueError on a constant-signal image; fall
+        # back to a midpoint threshold so segmentation can still proceed.
         t = (img.max() + img.min()) / 2.0
 
     binary = img > t
@@ -78,7 +80,7 @@ def detect_phantom_spec(
     image: np.ndarray,
     pixel_spacing_mm: tuple[float, float],
     candidates: dict[str, PhantomSpec] | None = None,
-) -> tuple[PhantomSpec, float]:
+) -> tuple[PhantomSpec, float | None]:
     """Pick the phantom spec whose nominal diameter is closest to the
     **left-right width** measured on `image` (typically ACR slice 1, or the
     sagittal localizer where the axial circumference also runs L-R).
@@ -87,19 +89,20 @@ def detect_phantom_spec(
     air bubbles at the top of the phantom can shrink the mask along the
     A-P / S-I axis and skew an area-based estimate.
 
-    Returns ``(spec, measured_width_mm)``. Falls back to ``default_phantom``
-    if segmentation fails.
+    Returns ``(spec, measured_width_mm)``; ``measured_width_mm`` is ``None``
+    when segmentation fails or returns an empty mask. The spec falls back to
+    ``default_phantom`` in that case.
     """
-    pool = candidates if candidates is not None else PHANTOMS
+    pool = candidates or PHANTOMS
     try:
         geom = localize_phantom(image)
         xs = np.where(geom.mask)[1]
         if xs.size == 0:
-            return default_phantom(), float("nan")
+            return default_phantom(), None
         width_px = float(xs.max() - xs.min() + 1)
         measured_mm = width_px * pixel_spacing_mm[1]
-    except Exception:
-        return default_phantom(), float("nan")
+    except (ValueError, IndexError):
+        return default_phantom(), None
     best = min(pool.values(), key=lambda s: abs(s.diameter_mm - measured_mm))
     return best, measured_mm
 

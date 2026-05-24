@@ -15,6 +15,7 @@ Responsibilities
 from __future__ import annotations
 
 import io as _io
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
@@ -22,6 +23,8 @@ from typing import Iterable
 import numpy as np
 import pydicom
 from pydicom.dataset import FileDataset
+
+logger = logging.getLogger(__name__)
 
 from ..utils.phantom_spec import PhantomSpec, default_phantom
 
@@ -98,6 +101,10 @@ def _read_one(source) -> FileDataset | None:
             return pydicom.dcmread(_io.BytesIO(source), force=True)
         return pydicom.dcmread(str(source), force=True)
     except Exception:
+        # Anything pydicom raises here (InvalidDicomError, OSError, struct
+        # errors on malformed files) we treat as "not a DICOM" and skip;
+        # log at debug so the failure mode is recoverable from a verbose log.
+        logger.debug("DICOM read failed for %r", source, exc_info=True)
         return None
 
 
@@ -105,7 +112,7 @@ def _has_image(ds: FileDataset) -> bool:
     try:
         _ = ds.pixel_array
         return True
-    except Exception:
+    except (AttributeError, ValueError, KeyError):
         return False
 
 
@@ -120,6 +127,15 @@ class DicomLoadError(ValueError):
     def __init__(self, message: str, *, tip: str = ""):
         super().__init__(message)
         self.tip = tip
+
+
+def _pad_or_crop(arr: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
+    """Make sure all slices share the same (rows, cols)."""
+    out = np.zeros(target_shape, dtype=arr.dtype)
+    rs = min(arr.shape[0], target_shape[0])
+    cs = min(arr.shape[1], target_shape[1])
+    out[:rs, :cs] = arr[:rs, :cs]
+    return out
 
 
 def load_series(sources: Iterable) -> DicomSeries:
@@ -272,15 +288,6 @@ def load_series(sources: Iterable) -> DicomSeries:
     return series
 
 
-def _pad_or_crop(arr: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
-    """Make sure all slices share the same (rows, cols)."""
-    out = np.zeros(target_shape, dtype=arr.dtype)
-    rs = min(arr.shape[0], target_shape[0])
-    cs = min(arr.shape[1], target_shape[1])
-    out[:rs, :cs] = arr[:rs, :cs]
-    return out
-
-
 def default_acr_slice_map(n_slices: int, spec: PhantomSpec | None = None) -> dict[int, int]:
     """The standard ACR axial protocol acquires 11 slices. The ACR test
     procedures reference *slice 1* (inferior, with the bars/wedges),
@@ -407,7 +414,7 @@ def validate_series(series: DicomSeries) -> list[str]:
                     "ImageOrientationPatient suggests the series is not strictly "
                     f"axial. {spec.name} procedures assume axial acquisition."
                 )
-        except Exception:
+        except (TypeError, ValueError, IndexError):
             pass
 
     return warnings
