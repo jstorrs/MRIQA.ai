@@ -116,6 +116,11 @@ def _selected_catalog_entry() -> SeriesCatalogEntry | None:
     return next((e for e in catalog if e["uid"] == chosen_uid), None)
 
 
+def _needs_reload(entry: SeriesCatalogEntry) -> bool:
+    """True when the catalog entry isn't the one currently loaded."""
+    return st.session_state.get("loaded_series_uid") != entry["uid"]
+
+
 def _apply_loaded_series(loaded: DicomSeries, *, loaded_uid: str | None = None) -> None:
     """Store a freshly loaded series and reset everything derived from it."""
     st.session_state.series = loaded
@@ -126,11 +131,14 @@ def _apply_loaded_series(loaded: DicomSeries, *, loaded_uid: str | None = None) 
 
 
 try:
-    if local_folder.strip():
-        _apply_loaded_series(load_series_from_folder(local_folder.strip()))
-    elif (entry := _selected_catalog_entry()) is not None and \
-            st.session_state.get("loaded_series_uid") != entry["uid"]:
-        _apply_loaded_series(load_series(entry["sources"]), loaded_uid=entry["uid"])
+    folder_path = local_folder.strip()
+    catalog_entry = _selected_catalog_entry()
+    if folder_path:
+        _apply_loaded_series(load_series_from_folder(folder_path))
+    elif catalog_entry is not None and _needs_reload(catalog_entry):
+        _apply_loaded_series(
+            load_series(catalog_entry["sources"]), loaded_uid=catalog_entry["uid"],
+        )
 except Exception as exc:
     uploads.show_load_error(exc)
 
