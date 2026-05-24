@@ -106,10 +106,12 @@ def _detect_resolution_grids(image, geom):
     """
     cy, cx, r = geom.cy_px, geom.cx_px, geom.radius_px
     H, W = image.shape
-    r0 = max(0, int(cy + 0.20 * r)); r1 = min(H, int(cy + 0.72 * r))
+    r0 = max(0, int(cy + 0.20 * r))
+    r1 = min(H, int(cy + 0.72 * r))
     # Right edge generously beyond the 3-array span so 4-array phantoms'
     # rightmost 0.8 mm grid sits inside the search window.
-    c0 = max(0, int(cx - 0.28 * r)); c1 = min(W, int(cx + 0.70 * r))
+    c0 = max(0, int(cx - 0.28 * r))
+    c1 = min(W, int(cx + 0.70 * r))
     if r1 - r0 < 6 or c1 - c0 < 20:
         return None, None
     win = image[r0:r1, c0:c1]

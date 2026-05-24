@@ -9,10 +9,8 @@ Deployed: Streamlit Community Cloud points at this file.
 from __future__ import annotations
 
 import sys
-from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 import streamlit as st
 
 # ---- make the `app/` package importable --------------------------------- #
@@ -22,7 +20,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from app.io_dicom.dicom_loader import (              # noqa: E402
-    DicomSeries, DicomLoadError, load_series, default_acr_slice_map,
+    DicomSeries, load_series, default_acr_slice_map,
     validate_series,
 )
 from app.qa_tests import AXIAL_TEST_ORDER, SAGITTAL_TEST_ORDER  # noqa: E402

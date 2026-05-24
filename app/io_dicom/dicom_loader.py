@@ -24,9 +24,9 @@ import numpy as np
 import pydicom
 from pydicom.dataset import FileDataset
 
-logger = logging.getLogger(__name__)
-
 from ..utils.phantom_spec import PhantomSpec, default_phantom
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass

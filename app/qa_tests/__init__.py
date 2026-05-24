@@ -8,7 +8,7 @@ Two analyses live in this package:
   (S-I length), exposed as ``SAGITTAL_TEST_ORDER``.
 """
 
-from .base import TestResult  # re-export
+from .base import TestResult as TestResult  # re-export
 from . import (
     geometric_accuracy,
     high_contrast_resolution,

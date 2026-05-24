@@ -58,9 +58,9 @@ def _fwhm_with_pos(profile: np.ndarray, x0: int):
     above = np.where(p >= half)[0]
     if above.size < 2:
         return 0.0, None, None
-    l, r = above[0], above[-1]
-    lf = l - 1 + (half - p[l - 1]) / (p[l] - p[l - 1] + 1e-9) if l > 0 else float(l)
-    rf = r + (half - p[r]) / (p[r + 1] - p[r] + 1e-9) if r < len(p) - 1 else float(r)
+    lo, hi = above[0], above[-1]
+    lf = lo - 1 + (half - p[lo - 1]) / (p[lo] - p[lo - 1] + 1e-9) if lo > 0 else float(lo)
+    rf = hi + (half - p[hi]) / (p[hi + 1] - p[hi] + 1e-9) if hi < len(p) - 1 else float(hi)
     return rf - lf, x0 + lf, x0 + rf
 
 
