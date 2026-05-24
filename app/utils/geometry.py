@@ -89,7 +89,7 @@ def fwhm_with_positions(profile: np.ndarray, x0: int = 0) -> FwhmFit:
     positions so callers can pass a profile sliced out of a larger
     array and get back image-coordinate positions.
     """
-    p = _smooth(np.asarray(profile, dtype=float), 3)
+    p = smooth_boxcar(np.asarray(profile, dtype=float), 3)
     base = float(np.percentile(p, 5))
     peak = float(p.max())
     if peak - base < 1e-6:
@@ -115,7 +115,8 @@ def fwhm_with_positions(profile: np.ndarray, x0: int = 0) -> FwhmFit:
     return FwhmFit(rf - lf, x0 + lf, x0 + rf)
 
 
-def _smooth(arr: np.ndarray, window: int) -> np.ndarray:
+def smooth_boxcar(arr: np.ndarray, window: int) -> np.ndarray:
+    """Boxcar-smooth a 1D array. Used for FWHM/profile detection in QA tests."""
     return np.convolve(arr, np.ones(window) / window, mode="same")
 
 

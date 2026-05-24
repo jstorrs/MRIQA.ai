@@ -37,7 +37,9 @@ from typing import NamedTuple
 import numpy as np
 
 from ..io_dicom.dicom_loader import DicomSeries
-from ..utils.geometry import FwhmFit, contiguous_runs, fwhm_with_positions
+from ..utils.geometry import (
+    FwhmFit, contiguous_runs, fwhm_with_positions, smooth_boxcar,
+)
 from ..utils.phantom import localize_phantom
 from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
@@ -56,16 +58,12 @@ class SliceThicknessFit(NamedTuple):
     lower: FwhmFit
 
 
-def _smooth(p: np.ndarray, n: int = 3) -> np.ndarray:
-    return np.convolve(p.astype(float), np.ones(n) / n, mode="same")
-
-
 def _find_void_band(img: np.ndarray, cx: float, cy: float, radius_px: float) -> tuple[int, int]:
     """Locate the slice-thickness void band as a short, low-signal row run
     near the phantom centre, bracketed above and below by bright phantom.
     Returns ``(band_top, band_bot)`` (inclusive row indices)."""
     c_lo, c_hi = int(cx - 0.20 * radius_px), int(cx + 0.20 * radius_px)
-    rprof = _smooth(img[:, c_lo:c_hi].mean(axis=1), 3)
+    rprof = smooth_boxcar(img[:, c_lo:c_hi].mean(axis=1), 3)
     H = img.shape[0]
     y0, y1 = max(0, int(cy - radius_px)), min(H, int(cy + radius_px))
     bright = float(np.percentile(rprof[y0:y1], 90))
@@ -92,7 +90,7 @@ def _find_septum(img: np.ndarray, band_top: int, band_bot: int, cx: float, radiu
     """Row index of the dark septum between the two bright ramps inside the
     slice-thickness insert."""
     cc_lo, cc_hi = int(cx - 0.25 * radius_px), int(cx + 0.25 * radius_px)
-    bright = _smooth(img[band_top:band_bot + 1, cc_lo:cc_hi].mean(axis=1), 3)
+    bright = smooth_boxcar(img[band_top:band_bot + 1, cc_lo:cc_hi].mean(axis=1), 3)
     mid = len(bright) // 2
     up_peak = int(np.argmax(bright[: mid + 1]))
     lo_peak = mid + int(np.argmax(bright[mid:]))
