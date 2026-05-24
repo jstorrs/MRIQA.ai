@@ -31,7 +31,7 @@ from . import (
 )
 
 if TYPE_CHECKING:
-    from ..io_dicom.dicom_loader import DicomSeries
+    from ..io_dicom.dicom_loader import DicomSeries, SeriesMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,17 @@ logger = logging.getLogger(__name__)
 # Two modes today — axial protocol and sagittal localizer. A Literal is
 # enough; promote to an enum if more modes appear.
 AnalysisMode = Literal["axial", "sagittal"]
+
+
+def infer_analysis_mode(metadata: "SeriesMetadata") -> AnalysisMode:
+    """Pick the analysis a series should run.
+
+    A single-image series is the sagittal-localizer S-I length analysis
+    (the only ACR check that lives on the sagittal scout); anything
+    multi-slice runs the axial protocol. Short axial uploads still get a
+    non-fatal warning from ``validate_series``, but they run as axial.
+    """
+    return "sagittal" if metadata.n_slices == 1 else "axial"
 
 
 @dataclass(frozen=True)

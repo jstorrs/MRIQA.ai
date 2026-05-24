@@ -20,7 +20,7 @@ from app.io_dicom.dicom_loader import (
     DicomSeries, load_series, load_series_from_folder, validate_series,
 )
 from app.qa_tests import (
-    AXIAL_TEST_ORDER, SAGITTAL_TEST_ORDER, AnalysisMode,
+    AXIAL_TEST_ORDER, SAGITTAL_TEST_ORDER, AnalysisMode, infer_analysis_mode,
 )
 from app.ui import (
     auth, export, history, landing, manual_scoring,
@@ -160,10 +160,7 @@ md = series.metadata
 # --------------------------------------------------------------------------- #
 # Analysis mode (axial protocol vs sagittal localizer)                        #
 # --------------------------------------------------------------------------- #
-# A single-image series is treated as the sagittal-localizer S-I length
-# analysis. Anything multi-slice runs the full axial protocol (the loader will
-# already have warned on short series via validate_series).
-analysis_mode: AnalysisMode = "sagittal" if md.n_slices == 1 else "axial"
+analysis_mode: AnalysisMode = infer_analysis_mode(md)
 test_order = SAGITTAL_TEST_ORDER if analysis_mode == "sagittal" else AXIAL_TEST_ORDER
 
 # Clear results when switching analyses inside the same session (e.g. user
