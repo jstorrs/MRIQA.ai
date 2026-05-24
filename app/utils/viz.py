@@ -29,7 +29,7 @@ def normalize(image: np.ndarray, wl: float | None = None, ww: float | None = Non
         return np.zeros((1, 1), dtype=np.float32)
     if wl is not None and ww is not None and ww > 0:
         lo, hi = wl - ww / 2.0, wl + ww / 2.0
-        return np.clip((img - lo) / (hi - lo + 1e-9), 0.0, 1.0)
+        return np.clip((img - lo) / (hi - lo), 0.0, 1.0)
     p2, p98 = np.percentile(img, (2, 98))
     if p98 - p2 < 1e-6:
         p2, p98 = float(img.min()), float(img.max() + 1)

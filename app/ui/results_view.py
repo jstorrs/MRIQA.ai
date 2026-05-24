@@ -57,7 +57,7 @@ def run_automated_tests(
     prog = st.progress(0, text="Running automated tests...")
     for i, t in enumerate(automated):
         prog.progress(
-            (i + 1) / max(1, len(automated)),
+            (i + 1) / len(automated),
             text=f"Running {t.label}...",
         )
         out[t.id] = run_test(t, series)
