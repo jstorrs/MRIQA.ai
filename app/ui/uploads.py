@@ -190,20 +190,20 @@ def render_sidebar(app_version: str) -> str:
                 )
             existing_uids = {e["uid"] for e in st.session_state.series_catalog}
             added = [e for e in new_entries if e["uid"] not in existing_uids]
-            if added:
-                st.session_state.series_catalog = (
-                    st.session_state.series_catalog + added
-                )
-            elif new_entries:
-                st.sidebar.info(
-                    f"All {len(new_entries)} series in that batch are already "
-                    "in the list."
-                )
-            elif not new_entries:
+            if not new_entries:
                 show_load_error(DicomLoadError(
                     "No DICOM files found in the upload.",
                     tip="The uploader accepts .dcm files or zips containing them.",
                 ))
+            elif added:
+                st.session_state.series_catalog = (
+                    st.session_state.series_catalog + added
+                )
+            else:
+                st.sidebar.info(
+                    f"All {len(new_entries)} series in that batch are already "
+                    "in the list."
+                )
             st.session_state.uploader_nonce += 1
             st.rerun()
 
