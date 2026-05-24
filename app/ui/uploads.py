@@ -19,7 +19,7 @@ from typing import TypedDict
 import pydicom
 import streamlit as st
 
-from ..io_dicom.dicom_loader import DicomLoadError
+from ..io_dicom.dicom_loader import NOT_A_DICOM_ERRORS, DicomLoadError
 
 
 logger = logging.getLogger(__name__)
@@ -71,7 +71,7 @@ def catalog_uploads(uploaded_files) -> tuple[list[SeriesCatalogEntry], int]:
         for payload in payloads:
             try:
                 ds = pydicom.dcmread(io.BytesIO(payload), force=True, stop_before_pixels=True)
-            except Exception:
+            except NOT_A_DICOM_ERRORS:
                 logger.debug("Failed to read DICOM header from upload payload", exc_info=True)
                 n_skipped += 1
                 continue

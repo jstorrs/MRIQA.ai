@@ -15,6 +15,7 @@ Responsibilities
 from __future__ import annotations
 
 import logging
+import struct
 from io import BytesIO
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,10 +24,21 @@ from typing import Iterable
 import numpy as np
 import pydicom
 from pydicom.dataset import FileDataset
+from pydicom.errors import BytesLengthException, InvalidDicomError
 
 from ..utils.phantom_spec import PhantomSpec, default_phantom
 
 logger = logging.getLogger(__name__)
+
+# Exceptions pydicom and friends raise on a file that isn't a usable DICOM.
+# Anything outside this set is unexpected and should propagate so it's not
+# silently swallowed. ValueError covers most malformed-tag conditions;
+# BytesLengthException is pydicom's specific signal for a tag whose length
+# doesn't divide its VR (often fires on PDFs/JPEGs read with force=True).
+NOT_A_DICOM_ERRORS: tuple[type[Exception], ...] = (
+    InvalidDicomError, BytesLengthException, OSError, struct.error,
+    EOFError, ValueError,
+)
 
 
 @dataclass
@@ -93,17 +105,19 @@ class DicomSeries:
 
 
 def _read_one(source) -> FileDataset | None:
-    """Read a single DICOM from path, Path, bytes, or file-like."""
+    """Read a single DICOM from path, Path, bytes, or file-like.
+
+    Returns None for anything that doesn't parse as a DICOM. Truly
+    unexpected errors (programming bugs in pydicom, etc.) propagate so
+    they aren't silently lost.
+    """
     try:
         if hasattr(source, "read"):
             return pydicom.dcmread(source, force=True)
         if isinstance(source, (bytes, bytearray)):
             return pydicom.dcmread(BytesIO(source), force=True)
         return pydicom.dcmread(str(source), force=True)
-    except Exception:
-        # Anything pydicom raises here (InvalidDicomError, OSError, struct
-        # errors on malformed files) we treat as "not a DICOM" and skip;
-        # log at debug so the failure mode is recoverable from a verbose log.
+    except NOT_A_DICOM_ERRORS:
         logger.debug("DICOM read failed for %r", source, exc_info=True)
         return None
 
@@ -113,6 +127,7 @@ def _has_image(ds: FileDataset) -> bool:
         _ = ds.pixel_array
         return True
     except (AttributeError, ValueError, KeyError):
+        logger.debug("pixel_array unavailable for %r", ds, exc_info=True)
         return False
 
 
