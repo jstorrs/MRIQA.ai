@@ -8,6 +8,7 @@ from pathlib import Path
 import streamlit as st
 
 from ..io_dicom.dicom_loader import DicomSeries
+from ..qa_tests import TestSpec
 from ..qa_tests.base import TestResult
 from ..reporting.csv_report import write_csv
 from ..reporting.pdf_report import write_pdf
@@ -15,7 +16,7 @@ from ..reporting.pdf_report import write_pdf
 
 def render(
     series: DicomSeries,
-    test_order: list,
+    test_order: list[TestSpec],
     exports_dir: Path,
     app_version: str,
 ) -> None:
@@ -32,8 +33,8 @@ def render(
     pdf_path = exports_dir / f"QAreport_{stamp}.pdf"
     csv_path = exports_dir / f"QAreport_{stamp}.csv"
     results_list: list[TestResult] = [
-        st.session_state.results[t[0]] for t in test_order
-        if t[0] in st.session_state.results
+        st.session_state.results[t.id] for t in test_order
+        if t.id in st.session_state.results
     ]
 
     cgen, _ = st.columns([1, 3])

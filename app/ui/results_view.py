@@ -13,6 +13,7 @@ import logging
 import streamlit as st
 
 from ..io_dicom.dicom_loader import DicomSeries
+from ..qa_tests import AnalysisMode, TestSpec
 from ..qa_tests.base import TestResult, verdict_of
 from .badges import confidence_badge, status_badge
 from .history import snapshot_run
@@ -30,33 +31,32 @@ _VERDICT_CSS_CLASS = {
 }
 
 
-def run_automated_tests(series: DicomSeries, test_order: list) -> dict[str, TestResult]:
+def run_automated_tests(
+    series: DicomSeries, test_order: list[TestSpec],
+) -> dict[str, TestResult]:
     """Run every non-visual test in test_order. Returns a dict ready to
     merge into st.session_state.results."""
     out: dict[str, TestResult] = {}
-    automated = [
-        (tid, label, mod) for (tid, label, mod) in test_order
-        if tid not in VISUAL_TEST_IDS
-    ]
+    automated = [t for t in test_order if t.id not in VISUAL_TEST_IDS]
     prog = st.progress(0, text="Running automated tests...")
-    for i, (tid, label, mod) in enumerate(automated):
+    for i, t in enumerate(automated):
         prog.progress(
             (i + 1) / max(1, len(automated)),
-            text=f"Running {label}...",
+            text=f"Running {t.label}...",
         )
         try:
-            out[tid] = mod.run(series, spec=series.spec)
+            out[t.id] = t.runner.run(series, spec=series.spec)
         except Exception as e:  # surface to the user; never crash the run loop
-            logger.exception("QA test %r crashed", tid)
-            out[tid] = TestResult(
-                test_id=tid, test_name=label, automated=True,
+            logger.exception("QA test %r crashed", t.id)
+            out[t.id] = TestResult(
+                test_id=t.id, test_name=t.label, automated=True,
                 passed=None, error=str(e),
             )
     prog.empty()
     return out
 
 
-def _pending_visual_nudge(analysis_mode: str, scope: str) -> None:
+def _pending_visual_nudge(analysis_mode: AnalysisMode, scope: str) -> None:
     """Hint at the next user action when automated tests are in but visual
     scoring is still missing. The nudge is suppressed on the manual tab
     itself (where it would be redundant)."""
@@ -88,8 +88,8 @@ def _pending_visual_nudge(analysis_mode: str, scope: str) -> None:
 
 
 def render(
-    test_order: list,
-    analysis_mode: str,
+    test_order: list[TestSpec],
+    analysis_mode: AnalysisMode,
     series: DicomSeries,
     *,
     key_prefix: str,
@@ -112,13 +112,13 @@ def render(
     primary "I'm done" action on Results.
     """
     if scope == "automated":
-        displayed_order = [t for t in test_order if t[0] not in VISUAL_TEST_IDS]
+        displayed_order = [t for t in test_order if t.id not in VISUAL_TEST_IDS]
     elif scope == "manual":
-        displayed_order = [t for t in test_order if t[0] in VISUAL_TEST_IDS]
+        displayed_order = [t for t in test_order if t.id in VISUAL_TEST_IDS]
     else:
         displayed_order = list(test_order)
 
-    displayed_ids = {tid for tid, _, _ in displayed_order}
+    displayed_ids = {t.id for t in displayed_order}
     displayed_results = {
         tid: r for tid, r in st.session_state.results.items()
         if tid in displayed_ids
@@ -143,10 +143,10 @@ def render(
     )
 
     rows = []
-    for tid, _, _ in displayed_order:
-        r: TestResult | None = st.session_state.results.get(tid)
+    for t in displayed_order:
+        r: TestResult | None = st.session_state.results.get(t.id)
         if r is None:
-            rows.append({"Test": tid, "Status": "—", "Confidence": "—", "Detail": ""})
+            rows.append({"Test": t.id, "Status": "—", "Confidence": "—", "Detail": ""})
             continue
         key = r.measurements[0] if r.measurements else None
         rows.append({
@@ -161,8 +161,8 @@ def render(
     st.dataframe(rows, hide_index=True, width="stretch")
 
     st.markdown("### Per-test details")
-    for tid, label, _ in displayed_order:
-        r = st.session_state.results.get(tid)
+    for t in displayed_order:
+        r = st.session_state.results.get(t.id)
         if r is None:
             continue
         title = f"{r.test_name} — {r.status_text()}"

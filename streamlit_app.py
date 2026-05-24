@@ -23,7 +23,9 @@ from app.io_dicom.dicom_loader import (              # noqa: E402
     DicomSeries, load_series, default_acr_slice_map,
     validate_series,
 )
-from app.qa_tests import AXIAL_TEST_ORDER, SAGITTAL_TEST_ORDER  # noqa: E402
+from app.qa_tests import (                              # noqa: E402
+    AXIAL_TEST_ORDER, SAGITTAL_TEST_ORDER, AnalysisMode,
+)
 from app.qa_tests.base import TestResult  # noqa: E402
 from app.ui import (                                  # noqa: E402
     analysis_inputs, auth, badges, export, history, manual_scoring,
@@ -200,7 +202,7 @@ md = series.metadata
 # A single-image series is treated as the sagittal-localizer S-I length
 # analysis. Anything multi-slice runs the full axial protocol (the loader will
 # already have warned on short series via validate_series).
-analysis_mode = "sagittal" if md.n_slices == 1 else "axial"
+analysis_mode: AnalysisMode = "sagittal" if md.n_slices == 1 else "axial"
 test_order = SAGITTAL_TEST_ORDER if analysis_mode == "sagittal" else AXIAL_TEST_ORDER
 
 # Clear results when switching analyses inside the same session (e.g. user
@@ -381,13 +383,13 @@ with tab_results:
         )
         if st.button("Run S-I length test", type="primary"):
             results: dict[str, TestResult] = dict(st.session_state.results)
-            for tid, label, mod in test_order:
+            for t in test_order:
                 try:
-                    res = mod.run(series, spec=series.spec)
+                    res = t.runner.run(series, spec=series.spec)
                 except Exception as e:
-                    res = TestResult(test_id=tid, test_name=label, automated=True,
+                    res = TestResult(test_id=t.id, test_name=t.label, automated=True,
                                      passed=None, error=str(e))
-                results[tid] = res
+                results[t.id] = res
             st.session_state.results = results
             st.rerun()
 

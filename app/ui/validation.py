@@ -14,6 +14,7 @@ from datetime import datetime
 import streamlit as st
 
 from ..io_dicom.dicom_loader import DicomSeries
+from ..qa_tests import AnalysisMode, TestSpec
 from ..qa_tests.base import verdict_of
 
 
@@ -36,7 +37,7 @@ _SAGITTAL_MANUAL_FIELDS = [
 ]
 
 
-def _render_checklist(analysis_mode: str) -> None:
+def _render_checklist(analysis_mode: AnalysisMode) -> None:
     st.markdown("### Per-dataset testing checklist")
     cols = st.columns(2)
     with cols[0]:
@@ -70,8 +71,8 @@ def _build_log_row(
     vendor: str,
     scanner_label: str,
     md,
-    analysis_mode: str,
-    test_order: list,
+    analysis_mode: AnalysisMode,
+    test_order: list[TestSpec],
     manual: dict[str, str],
     notes: str,
 ) -> dict:
@@ -93,19 +94,19 @@ def _build_log_row(
         "error_count":     counts["ERROR"],
         "analysis_mode":   analysis_mode,
     }
-    for tid, _, _ in test_order:
-        r = st.session_state.results.get(tid)
+    for t in test_order:
+        r = st.session_state.results.get(t.id)
         if r is None:
             continue
         key = r.measurements[0] if r.measurements else None
-        row[f"{tid}__status"]     = r.status_text()
-        row[f"{tid}__confidence"] = r.confidence
-        row[f"{tid}__warnings"]   = " | ".join(r.warnings)
+        row[f"{t.id}__status"]     = r.status_text()
+        row[f"{t.id}__confidence"] = r.confidence
+        row[f"{t.id}__warnings"]   = " | ".join(r.warnings)
         if key is not None:
-            row[f"{tid}__app_value"] = key.value
-            row[f"{tid}__unit"]      = key.unit
+            row[f"{t.id}__app_value"] = key.value
+            row[f"{t.id}__unit"]      = key.unit
         if r.error:
-            row[f"{tid}__error"] = r.error
+            row[f"{t.id}__error"] = r.error
     for k, v in manual.items():
         if v.strip():
             row[f"manual__{k}"] = v.strip()
@@ -159,7 +160,11 @@ def _render_log_download() -> None:
         st.rerun()
 
 
-def render(series: DicomSeries, test_order: list, analysis_mode: str) -> None:
+def render(
+    series: DicomSeries,
+    test_order: list[TestSpec],
+    analysis_mode: AnalysisMode,
+) -> None:
     st.subheader("Validation Mode")
     st.caption(
         "For pilot testing only. Use this tab to record manual measurements "

@@ -11,7 +11,12 @@ from __future__ import annotations
 import streamlit as st
 
 from ..io_dicom.dicom_loader import DicomSeries
-from ..qa_tests import high_contrast_resolution, low_contrast_detectability
+from ..qa_tests import (
+    AnalysisMode,
+    TestSpec,
+    high_contrast_resolution,
+    low_contrast_detectability,
+)
 from . import results_view
 
 
@@ -116,7 +121,11 @@ def _render_lcd(series: DicomSeries) -> None:
         st.success("Saved.")
 
 
-def render(series: DicomSeries, test_order: list, analysis_mode: str) -> None:
+def render(
+    series: DicomSeries,
+    test_order: list[TestSpec],
+    analysis_mode: AnalysisMode,
+) -> None:
     st.subheader("Visual / manual scoring")
     st.info(
         "**Two ACR tests are visual** — High-Contrast Spatial Resolution and "

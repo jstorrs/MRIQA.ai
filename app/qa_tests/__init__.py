@@ -6,7 +6,16 @@ Two analyses live in this package:
   tests, exposed as ``AXIAL_TEST_ORDER``.
 * **Sagittal localizer analysis** — a single-slice sagittal scout, one test
   (S-I length), exposed as ``SAGITTAL_TEST_ORDER``.
+
+The entry to a single test is a ``TestSpec`` — a frozen dataclass bundling
+the test id, human label, and the module exposing ``run(series, ...)``.
 """
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from types import ModuleType
+from typing import Literal
 
 from .base import TestResult as TestResult  # re-export
 from . import (
@@ -20,17 +29,31 @@ from . import (
     localizer_geometry,
 )
 
-# Ordered list of (id, label, module). The module must expose a `run(series, ...)` function.
-AXIAL_TEST_ORDER = [
-    ("geometric_accuracy", "Geometric Accuracy", geometric_accuracy),
-    ("high_contrast_resolution", "High-Contrast Spatial Resolution", high_contrast_resolution),
-    ("slice_thickness", "Slice Thickness Accuracy", slice_thickness),
-    ("slice_position", "Slice Position Accuracy", slice_position),
-    ("uniformity", "Image Intensity Uniformity (PIU)", uniformity),
-    ("ghosting", "Percent Signal Ghosting (PSG)", ghosting),
-    ("low_contrast_detectability", "Low-Contrast Object Detectability", low_contrast_detectability),
+
+# Two modes today — axial protocol and sagittal localizer. A Literal is
+# enough; promote to an enum if more modes appear.
+AnalysisMode = Literal["axial", "sagittal"]
+
+
+@dataclass(frozen=True)
+class TestSpec:
+    """One QA test in the registry — id, label, and the module exposing ``run``."""
+
+    id: str
+    label: str
+    runner: ModuleType
+
+
+AXIAL_TEST_ORDER: list[TestSpec] = [
+    TestSpec("geometric_accuracy", "Geometric Accuracy", geometric_accuracy),
+    TestSpec("high_contrast_resolution", "High-Contrast Spatial Resolution", high_contrast_resolution),
+    TestSpec("slice_thickness", "Slice Thickness Accuracy", slice_thickness),
+    TestSpec("slice_position", "Slice Position Accuracy", slice_position),
+    TestSpec("uniformity", "Image Intensity Uniformity (PIU)", uniformity),
+    TestSpec("ghosting", "Percent Signal Ghosting (PSG)", ghosting),
+    TestSpec("low_contrast_detectability", "Low-Contrast Object Detectability", low_contrast_detectability),
 ]
 
-SAGITTAL_TEST_ORDER = [
-    ("localizer_geometric_accuracy", "Geometric Accuracy — Sagittal Localizer", localizer_geometry),
+SAGITTAL_TEST_ORDER: list[TestSpec] = [
+    TestSpec("localizer_geometric_accuracy", "Geometric Accuracy — Sagittal Localizer", localizer_geometry),
 ]
