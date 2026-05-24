@@ -82,9 +82,8 @@ st.caption(
 # Session state init                                                          #
 # --------------------------------------------------------------------------- #
 
-# series_catalog: accumulated series across upload batches; entries are
-# the dicts returned by catalog_uploads ({uid, description, number,
-# modality, n_files, sources}). Selected by selected_series_uid.
+# series_catalog: list[SeriesCatalogEntry] (see app/ui/uploads.py),
+# accumulated across upload batches and indexed by selected_series_uid.
 # uploader_nonce: bumping re-mounts the file_uploader widget as a fresh,
 # empty drop zone so the persistent "1 file uploaded" list goes away.
 _SESSION_DEFAULTS = {

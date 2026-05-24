@@ -14,6 +14,7 @@ from __future__ import annotations
 import io
 import logging
 import zipfile
+from typing import TypedDict
 
 import pydicom
 import streamlit as st
@@ -24,18 +25,29 @@ from ..io_dicom.dicom_loader import DicomLoadError
 logger = logging.getLogger(__name__)
 
 
-def catalog_uploads(uploaded_files) -> tuple[list[dict], int]:
+class SeriesCatalogEntry(TypedDict):
+    """One series in the sidebar picker. Populated by catalog_uploads and
+    consumed by the entry point to pick which series to load.
+    """
+
+    uid: str
+    description: str
+    number: int
+    modality: str
+    n_files: int
+    sources: list[bytes]
+
+
+def catalog_uploads(uploaded_files) -> tuple[list[SeriesCatalogEntry], int]:
     """Group every DICOM file across the uploads by SeriesInstanceUID.
 
-    Returns ``(entries, n_skipped)``. Each entry looks like
-        {"uid", "description", "number", "modality", "n_files", "sources"}
-    sorted by SeriesNumber. ``n_skipped`` counts payloads pydicom
-    couldn't parse — the caller surfaces that to the user so a dragged-in
-    non-DICOM file doesn't silently disappear. Files without a
-    SeriesInstanceUID are still grouped under an empty UID so they can
-    be picked.
+    Returns ``(entries, n_skipped)``, with entries sorted by SeriesNumber.
+    ``n_skipped`` counts payloads pydicom couldn't parse — the caller
+    surfaces that to the user so a dragged-in non-DICOM file doesn't
+    silently disappear. Files without a SeriesInstanceUID are still
+    grouped under an empty UID so they can be picked.
     """
-    by_uid: dict[str, dict] = {}
+    by_uid: dict[str, SeriesCatalogEntry] = {}
     n_skipped = 0
     for uf in uploaded_files:
         name = uf.name.lower()
@@ -64,14 +76,14 @@ def catalog_uploads(uploaded_files) -> tuple[list[dict], int]:
                 n_skipped += 1
                 continue
             uid = str(getattr(ds, "SeriesInstanceUID", "") or "")
-            entry = by_uid.setdefault(uid, {
-                "uid": uid,
-                "description": str(getattr(ds, "SeriesDescription", "") or ""),
-                "number": int(getattr(ds, "SeriesNumber", 0) or 0),
-                "modality": str(getattr(ds, "Modality", "") or ""),
-                "n_files": 0,
-                "sources": [],
-            })
+            entry = by_uid.setdefault(uid, SeriesCatalogEntry(
+                uid=uid,
+                description=str(getattr(ds, "SeriesDescription", "") or ""),
+                number=int(getattr(ds, "SeriesNumber", 0) or 0),
+                modality=str(getattr(ds, "Modality", "") or ""),
+                n_files=0,
+                sources=[],
+            ))
             entry["n_files"] += 1
             entry["sources"].append(payload)
     sorted_entries = sorted(
@@ -81,7 +93,7 @@ def catalog_uploads(uploaded_files) -> tuple[list[dict], int]:
     return sorted_entries, n_skipped
 
 
-def series_label(entry: dict) -> str:
+def series_label(entry: SeriesCatalogEntry) -> str:
     """One-line label for the series picker dropdown."""
     parts = []
     if entry["number"]:
