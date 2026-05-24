@@ -24,16 +24,19 @@ from ..io_dicom.dicom_loader import DicomLoadError
 logger = logging.getLogger(__name__)
 
 
-def catalog_uploads(uploaded_files) -> list[dict]:
+def catalog_uploads(uploaded_files) -> tuple[list[dict], int]:
     """Group every DICOM file across the uploads by SeriesInstanceUID.
 
-    Returns a list of entries like
+    Returns ``(entries, n_skipped)``. Each entry looks like
         {"uid", "description", "number", "modality", "n_files", "sources"}
-    sorted by SeriesNumber. Files without a parseable header are skipped
-    silently; files without a SeriesInstanceUID are grouped under an empty
-    UID so they can still be picked.
+    sorted by SeriesNumber. ``n_skipped`` counts payloads pydicom
+    couldn't parse — the caller surfaces that to the user so a dragged-in
+    non-DICOM file doesn't silently disappear. Files without a
+    SeriesInstanceUID are still grouped under an empty UID so they can
+    be picked.
     """
     by_uid: dict[str, dict] = {}
+    n_skipped = 0
     for uf in uploaded_files:
         name = uf.name.lower()
         data = uf.read()
@@ -58,6 +61,7 @@ def catalog_uploads(uploaded_files) -> list[dict]:
                 ds = pydicom.dcmread(io.BytesIO(payload), force=True, stop_before_pixels=True)
             except Exception:
                 logger.debug("Failed to read DICOM header from upload payload", exc_info=True)
+                n_skipped += 1
                 continue
             uid = str(getattr(ds, "SeriesInstanceUID", "") or "")
             entry = by_uid.setdefault(uid, {
@@ -70,10 +74,11 @@ def catalog_uploads(uploaded_files) -> list[dict]:
             })
             entry["n_files"] += 1
             entry["sources"].append(payload)
-    return sorted(
+    sorted_entries = sorted(
         by_uid.values(),
         key=lambda e: (e["number"] or 0, e["description"]),
     )
+    return sorted_entries, n_skipped
 
 
 def series_label(entry: dict) -> str:
@@ -162,10 +167,15 @@ def render_sidebar(app_version: str) -> str:
 
         if new_uploads:
             try:
-                new_entries = catalog_uploads(new_uploads)
+                new_entries, n_skipped = catalog_uploads(new_uploads)
             except (zipfile.BadZipFile, OSError, DicomLoadError) as exc:
                 show_load_error(exc)
-                new_entries = []
+                new_entries, n_skipped = [], 0
+            if n_skipped:
+                st.sidebar.warning(
+                    f"Skipped {n_skipped} file(s) that couldn't be parsed as "
+                    "DICOM (PDFs, JPEGs, READMEs, etc.)."
+                )
             existing_uids = {e["uid"] for e in st.session_state.series_catalog}
             added = [e for e in new_entries if e["uid"] not in existing_uids]
             if added:

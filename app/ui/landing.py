@@ -8,6 +8,8 @@ the user hasn't picked a series yet.
 
 from __future__ import annotations
 
+from html import escape
+
 import streamlit as st
 
 from . import badges
@@ -55,8 +57,8 @@ def render() -> None:
         st.markdown("### Sessions completed this browser tab")
         for s in reversed(st.session_state.history):
             st.markdown(
-                f"- **{s['datetime']}** · {s['scanner']} · "
-                f"{s['sequence']} · {badges.status_badge(s['verdict'])} "
+                f"- **{escape(s['datetime'])}** · {escape(s['scanner'])} · "
+                f"{escape(s['sequence'])} · {badges.status_badge(s['verdict'])} "
                 f"(pass {s['counts']['PASS']} · fail {s['counts']['FAIL']} · "
                 f"review {s['counts']['REVIEW']})",
                 unsafe_allow_html=True,

@@ -10,6 +10,7 @@ feature lands, these objects will need a serializer first.
 from __future__ import annotations
 
 from datetime import datetime
+from html import escape
 
 import streamlit as st
 
@@ -61,8 +62,8 @@ def render() -> None:
             e.metric("Error", s["counts"]["ERROR"])
             st.markdown(
                 f"<span class='mri-small'>"
-                f"Patient/Phantom ID: {s['patient_id'] or '—'} · "
-                f"Series: {s['series_description'] or '—'} · "
+                f"Patient/Phantom ID: {escape(s['patient_id'] or '—')} · "
+                f"Series: {escape(s['series_description'] or '—')} · "
                 f"Slices: {s['n_slices']}"
                 f"</span>",
                 unsafe_allow_html=True,
