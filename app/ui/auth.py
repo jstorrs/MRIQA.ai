@@ -17,8 +17,10 @@ def _configured_password() -> str | None:
     """Return the shared password from Streamlit secrets, or None if unset."""
     try:
         return st.secrets.get("password")
-    except (FileNotFoundError, AttributeError, KeyError):
-        # No secrets file (local dev) or a missing key — treat as unset.
+    except FileNotFoundError:
+        # StreamlitSecretNotFoundError is a FileNotFoundError; this is the
+        # "no secrets configured anywhere" path (typically local dev). A
+        # missing 'password' key returns None from .get() without raising.
         return None
 
 
