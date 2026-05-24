@@ -131,17 +131,14 @@ def render_sidebar(app_version: str) -> str:
             if st.session_state.get("selected_series_uid") not in uid_options:
                 st.session_state.selected_series_uid = uid_options[0]
 
-            def _on_series_pick():
-                st.session_state.pending_tab_switch = "Analysis"
-
             st.selectbox(
                 f"Series ({len(catalog)} loaded)",
                 options=uid_options,
                 format_func=lambda u: labels[u],
                 key="selected_series_uid",
-                on_change=_on_series_pick,
                 help="Pick which series to analyze. Drop more files below to "
-                     "extend this list.",
+                     "extend this list. Switch to the **Analysis** tab when "
+                     "you pick a new series.",
             )
 
             if st.button("Clear all series", width="stretch"):

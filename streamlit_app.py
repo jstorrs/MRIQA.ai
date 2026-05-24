@@ -39,40 +39,6 @@ APP_VERSION = "0.2.0-mvp"
 
 
 # --------------------------------------------------------------------------- #
-# Helpers                                                                     #
-# --------------------------------------------------------------------------- #
-
-
-def _switch_tab(label: str) -> None:
-    """Programmatically activate the st.tabs tab whose label starts with
-    `label`. Streamlit has no API for this, so we inject a tiny script that
-    walks the parent document for buttons carrying the ARIA `role="tab"`
-    contract used by st.tabs and clicks the first match. Fragile against
-    Streamlit DOM changes but the ARIA role is the stable target."""
-    st.iframe(
-        f"""
-        <script>
-        (function() {{
-          const click = () => {{
-            const doc = window.parent.document;
-            const buttons = doc.querySelectorAll('button[role="tab"]');
-            for (const b of buttons) {{
-              const text = (b.innerText || b.textContent || '').trim();
-              if (text.startsWith({label!r})) {{ b.click(); return; }}
-            }}
-          }};
-          setTimeout(click, 50);
-        }})();
-        </script>
-        """,
-        # st.iframe's height validator rejects 0 — the smallest legal value is
-        # 1px, which leaves a sliver that's essentially invisible. The iframe
-        # body is just a <script> tag with no rendered content.
-        height=1,
-    )
-
-
-# --------------------------------------------------------------------------- #
 # Page setup                                                                  #
 # --------------------------------------------------------------------------- #
 
@@ -308,11 +274,6 @@ else:
     )
     tab_slices = None
     tab_manual = None
-
-# Honor a queued tab-switch request (set by the series-picker on_change).
-_pending = st.session_state.pop("pending_tab_switch", None)
-if _pending:
-    _switch_tab(_pending)
 
 # ----- Viewer ----------------------------------------------------------- #
 with tab_viewer:
