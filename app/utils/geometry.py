@@ -3,8 +3,22 @@
 from __future__ import annotations
 
 import math
+from typing import NamedTuple
 
 import numpy as np
+
+
+class FwhmFit(NamedTuple):
+    """FWHM length plus sub-pixel left/right edge positions.
+
+    ``left_x`` and ``right_x`` are in the same coordinate system as the
+    caller's profile origin (set via the ``x0`` argument to
+    :func:`fwhm_with_positions`). They are ``None`` when the profile is
+    too short, flat, or never crosses the half-max threshold.
+    """
+    fwhm_px: float
+    left_x: float | None
+    right_x: float | None
 
 
 def radius_px_for_area_cm2(area_cm2: float, pixel_spacing_mm) -> float:
@@ -66,43 +80,43 @@ def square_roi_mask(shape: tuple[int, int], cy: float, cx: float, half_size_px: 
     return (np.abs(yy - cy) <= half_size_px) & (np.abs(xx - cx) <= half_size_px)
 
 
-def fwhm_from_profile(profile: np.ndarray) -> float:
-    """Full-Width-Half-Maximum of a 1D profile in *pixel* units.
+def fwhm_with_positions(profile: np.ndarray, x0: int = 0) -> FwhmFit:
+    """FWHM (px) of a bright ramp over a low-signal baseline, plus the
+    sub-pixel left/right column positions.
 
-    Uses linear interpolation to estimate the half-max crossings, so the
-    result is sub-pixel accurate.
+    The baseline is the 5th-percentile of the smoothed profile (the
+    void floor below the ramp). ``x0`` is added to the returned
+    positions so callers can pass a profile sliced out of a larger
+    array and get back image-coordinate positions.
     """
-    p = np.asarray(profile, dtype=float)
-    if p.size < 3:
-        return 0.0
-    baseline = float(np.median(p[: max(2, p.size // 10)]))
+    p = _smooth(np.asarray(profile, dtype=float), 3)
+    base = float(np.percentile(p, 5))
     peak = float(p.max())
-    half = baseline + 0.5 * (peak - baseline)
+    if peak - base < 1e-6:
+        return FwhmFit(0.0, None, None)
+    half = base + 0.5 * (peak - base)
+    above = np.where(p >= half)[0]
+    if above.size < 2:
+        return FwhmFit(0.0, None, None)
+    lo, hi = int(above[0]), int(above[-1])
 
-    above = p >= half
-    if not above.any():
-        return 0.0
-
-    # left crossing
-    idx_above = np.where(above)[0]
-    left_i = idx_above[0]
-    right_i = idx_above[-1]
-
-    if left_i > 0:
-        x0, x1 = left_i - 1, left_i
-        y0, y1 = p[x0], p[x1]
-        left_x = x0 + (half - y0) / (y1 - y0 + 1e-12)
+    if lo > 0:
+        denom = p[lo] - p[lo - 1] + 1e-9
+        lf = (lo - 1) + (half - p[lo - 1]) / denom
     else:
-        left_x = float(left_i)
+        lf = float(lo)
 
-    if right_i < p.size - 1:
-        x0, x1 = right_i, right_i + 1
-        y0, y1 = p[x0], p[x1]
-        right_x = x0 + (half - y0) / (y1 - y0 + 1e-12)
+    if hi < len(p) - 1:
+        denom = p[hi + 1] - p[hi] + 1e-9
+        rf = hi + (half - p[hi]) / denom
     else:
-        right_x = float(right_i)
+        rf = float(hi)
 
-    return max(0.0, right_x - left_x)
+    return FwhmFit(rf - lf, x0 + lf, x0 + rf)
+
+
+def _smooth(arr: np.ndarray, window: int) -> np.ndarray:
+    return np.convolve(arr, np.ones(window) / window, mode="same")
 
 
 def line_profile(image: np.ndarray, p0: tuple[float, float], p1: tuple[float, float], n: int = 200) -> np.ndarray:

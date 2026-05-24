@@ -37,48 +37,27 @@ from typing import NamedTuple
 import numpy as np
 
 from ..io_dicom.dicom_loader import DicomSeries
-from ..utils.geometry import contiguous_runs
+from ..utils.geometry import FwhmFit, contiguous_runs, fwhm_with_positions
 from ..utils.phantom import localize_phantom
 from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
 
 
-class RampFit(NamedTuple):
-    """FWHM and sub-pixel left/right edges for one bright signal ramp."""
-    fwhm_px: float
-    left_x: float | None
-    right_x: float | None
+# Re-export under the test-local name used by tests / earlier callers.
+RampFit = FwhmFit
 
 
 class SliceThicknessFit(NamedTuple):
     """Upper- and lower-ramp FWHM in mm, plus annotation positions."""
     top_mm: float
     bot_mm: float
-    upper: RampFit
-    lower: RampFit
+    upper: FwhmFit
+    lower: FwhmFit
 
 
 def _smooth(p: np.ndarray, n: int = 3) -> np.ndarray:
     return np.convolve(p.astype(float), np.ones(n) / n, mode="same")
-
-
-def _fwhm_with_pos(profile: np.ndarray, x0: int) -> RampFit:
-    """FWHM (px) of a bright ramp over a void baseline, plus the sub-pixel
-    left/right column positions for annotation."""
-    p = _smooth(profile, 3)
-    base = np.percentile(p, 5)        # void floor
-    peak = p.max()
-    if peak - base < 1e-6:
-        return RampFit(0.0, None, None)
-    half = base + 0.5 * (peak - base)
-    above = np.where(p >= half)[0]
-    if above.size < 2:
-        return RampFit(0.0, None, None)
-    lo, hi = above[0], above[-1]
-    lf = lo - 1 + (half - p[lo - 1]) / (p[lo] - p[lo - 1] + 1e-9) if lo > 0 else float(lo)
-    rf = hi + (half - p[hi]) / (p[hi + 1] - p[hi] + 1e-9) if hi < len(p) - 1 else float(hi)
-    return RampFit(rf - lf, x0 + lf, x0 + rf)
 
 
 def _find_void_band(img: np.ndarray, cx: float, cy: float, radius_px: float) -> tuple[int, int]:
@@ -169,8 +148,8 @@ def _measure_ramp_fwhms(
     x0, x1 = int(cx - 0.55 * radius_px), int(cx + 0.55 * radius_px)
     up_prof = img[band_top:septum, x0:x1].mean(axis=0)
     lo_prof = img[septum + 1:band_bot + 1, x0:x1].mean(axis=0)
-    upper = _fwhm_with_pos(up_prof, x0)
-    lower = _fwhm_with_pos(lo_prof, x0)
+    upper = fwhm_with_positions(up_prof, x0)
+    lower = fwhm_with_positions(lo_prof, x0)
     top_mm = upper.fwhm_px * col_spacing_mm
     bot_mm = lower.fwhm_px * col_spacing_mm
     if top_mm + bot_mm < 1e-6:
