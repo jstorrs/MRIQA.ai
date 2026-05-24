@@ -22,6 +22,8 @@ measurement when the prescribed ROI plus that gap cannot fit.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import numpy as np
 from matplotlib.patches import Circle, Ellipse
 
@@ -39,24 +41,32 @@ from .base import Measurement, TestResult
 _AIR_ROI_COLORS = {"top": "yellow", "bottom": "yellow", "left": "magenta", "right": "magenta"}
 
 
+class _AirROI(NamedTuple):
+    """Pixel geometry of one air ROI: centre + semi-axes (rows × cols)."""
+    cy: float
+    cx: float
+    semi_y: float
+    semi_x: float
+
+
 def _draw_ghosting(
     ax,
     *,
     cx: float,
     cy: float,
     r_large: float,
-    rois: dict,
+    rois: dict[str, _AirROI],
     means: dict[str, float],
     psg_pct: float,
 ) -> None:
     ax.add_patch(Circle((cx, cy), r_large, fill=False, edgecolor="cyan", lw=1.5))
-    for name, (rcy, rcx, sy, sx) in rois.items():
+    for name, roi in rois.items():
         ax.add_patch(Ellipse(
-            (rcx, rcy), width=2 * sx, height=2 * sy,
+            (roi.cx, roi.cy), width=2 * roi.semi_x, height=2 * roi.semi_y,
             fill=False, edgecolor=_AIR_ROI_COLORS[name], lw=1.5,
         ))
         ax.annotate(
-            f"{name}\n{means[name]:.1f}", (rcx, rcy),
+            f"{name}\n{means[name]:.1f}", (roi.cx, roi.cy),
             color=_AIR_ROI_COLORS[name], fontsize=7, ha="center", va="center",
         )
     ax.set_title(f"Slice 7 — PSG = {psg_pct:.3f} %", fontsize=10)
@@ -76,7 +86,7 @@ def _air_rois(
     area_cm2: float,
     aspect_ratio: float,
     min_gap_mm: float = _MIN_PHANTOM_GAP_MM,
-) -> dict[str, tuple[float, float, float, float]]:
+) -> dict[str, _AirROI]:
     long_mm, short_mm = ellipse_axes_for_area_cm2(area_cm2, aspect_ratio)
     long_row = _mm_to_px(long_mm / 2.0, ps[0])
     long_col = _mm_to_px(long_mm / 2.0, ps[1])
@@ -97,23 +107,23 @@ def _air_rois(
     horizontal_center = min(max(geom.cx_px, long_col), width - 1 - long_col)
     vertical_center = min(max(geom.cy_px, long_row), height - 1 - long_row)
     return {
-        "top": (
-            midpoint(short_row, geom.cy_px - geom.radius_px - short_row - gap_row, "top"),
-            horizontal_center, short_row, long_col,
+        "top": _AirROI(
+            cy=midpoint(short_row, geom.cy_px - geom.radius_px - short_row - gap_row, "top"),
+            cx=horizontal_center, semi_y=short_row, semi_x=long_col,
         ),
-        "bottom": (
-            midpoint(geom.cy_px + geom.radius_px + short_row + gap_row, height - 1 - short_row, "bottom"),
-            horizontal_center, short_row, long_col,
+        "bottom": _AirROI(
+            cy=midpoint(geom.cy_px + geom.radius_px + short_row + gap_row, height - 1 - short_row, "bottom"),
+            cx=horizontal_center, semi_y=short_row, semi_x=long_col,
         ),
-        "left": (
-            vertical_center,
-            midpoint(short_col, geom.cx_px - geom.radius_px - short_col - gap_col, "left"),
-            long_row, short_col,
+        "left": _AirROI(
+            cy=vertical_center,
+            cx=midpoint(short_col, geom.cx_px - geom.radius_px - short_col - gap_col, "left"),
+            semi_y=long_row, semi_x=short_col,
         ),
-        "right": (
-            vertical_center,
-            midpoint(geom.cx_px + geom.radius_px + short_col + gap_col, width - 1 - short_col, "right"),
-            long_row, short_col,
+        "right": _AirROI(
+            cy=vertical_center,
+            cx=midpoint(geom.cx_px + geom.radius_px + short_col + gap_col, width - 1 - short_col, "right"),
+            semi_y=long_row, semi_x=short_col,
         ),
     }
 
@@ -154,8 +164,8 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
 
         means: dict[str, float] = {}
         masks: dict[str, np.ndarray] = {}
-        for name, (cy, cx, sy, sx) in rois.items():
-            mask = elliptical_roi_mask(img.shape, cy, cx, sy, sx)
+        for name, roi in rois.items():
+            mask = elliptical_roi_mask(img.shape, roi.cy, roi.cx, roi.semi_y, roi.semi_x)
             if mask.sum() < 5:
                 raise ValueError(f"Air ROI '{name}' fell outside the image; check FOV.")
             masks[name] = mask
