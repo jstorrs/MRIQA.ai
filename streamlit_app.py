@@ -8,14 +8,11 @@ Deployed: Streamlit Community Cloud points at this file.
 
 from __future__ import annotations
 
-import io
 import sys
-import zipfile
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-import pydicom
 import streamlit as st
 
 # ---- make the `app/` package importable --------------------------------- #
@@ -33,7 +30,7 @@ from app.qa_tests import high_contrast_resolution, low_contrast_detectability  #
 from app.qa_tests.base import TestResult, verdict_of  # noqa: E402
 from app.utils.phantom import detect_phantom_spec    # noqa: E402
 from app.utils.phantom_spec import PHANTOMS, LARGE   # noqa: E402
-from app.ui import auth, viewer, history, export  # noqa: E402
+from app.ui import auth, viewer, history, export, uploads, validation  # noqa: E402
 from app.ui.badges import (                          # noqa: E402
     normalize_img as _normalize_img,
     status_badge as _status_badge,
@@ -49,66 +46,6 @@ APP_VERSION = "0.2.0-mvp"
 # --------------------------------------------------------------------------- #
 # Helpers                                                                     #
 # --------------------------------------------------------------------------- #
-
-
-def _catalog_uploads(uploaded_files) -> list[dict]:
-    """Group every DICOM file across the uploads by SeriesInstanceUID.
-
-    Returns a list of entries like
-        {"uid", "description", "number", "modality", "n_files", "sources"}
-    sorted by SeriesNumber. `sources` is a list of raw bytes ready to hand to
-    ``load_series``. Files without a parseable header are skipped silently;
-    files without a SeriesInstanceUID are grouped under an empty UID so they
-    can still be picked.
-    """
-    by_uid: dict[str, dict] = {}
-    for uf in uploaded_files:
-        name = uf.name.lower()
-        data = uf.read()
-        payloads: list[bytes] = []
-        if name.endswith(".zip"):
-            try:
-                z = zipfile.ZipFile(io.BytesIO(data))
-                for info in z.infolist():
-                    if info.is_dir():
-                        continue
-                    nlow = info.filename.lower()
-                    if "__macosx" in nlow or nlow.endswith(".ds_store"):
-                        continue
-                    payloads.append(z.read(info))
-            except zipfile.BadZipFile:
-                st.error(f"Could not read zip: {uf.name}")
-                continue
-        else:
-            payloads.append(data)
-        for payload in payloads:
-            try:
-                ds = pydicom.dcmread(io.BytesIO(payload), force=True, stop_before_pixels=True)
-            except Exception:
-                continue
-            uid = str(getattr(ds, "SeriesInstanceUID", "") or "")
-            entry = by_uid.setdefault(uid, {
-                "uid": uid,
-                "description": str(getattr(ds, "SeriesDescription", "") or ""),
-                "number": int(getattr(ds, "SeriesNumber", 0) or 0),
-                "modality": str(getattr(ds, "Modality", "") or ""),
-                "n_files": 0,
-                "sources": [],
-            })
-            entry["n_files"] += 1
-            entry["sources"].append(payload)
-    return sorted(by_uid.values(),
-                  key=lambda e: (e["number"] or 0, e["description"]))
-
-
-def _series_label(entry: dict) -> str:
-    parts = []
-    if entry["number"]:
-        parts.append(f"#{entry['number']}")
-    desc = entry["description"] or "(no description)"
-    parts.append(desc)
-    parts.append(f"[{entry['modality'] or '?'}, {entry['n_files']} files]")
-    return " ".join(parts)
 
 
 def _switch_tab(label: str) -> None:
@@ -216,105 +153,7 @@ if "uploader_nonce" not in st.session_state:
     st.session_state.uploader_nonce = 0
 
 
-def _show_load_error(exc: Exception):
-    if isinstance(exc, DicomLoadError):
-        st.sidebar.error(str(exc))
-        if exc.tip:
-            st.sidebar.info(f"**Tip:** {exc.tip}")
-    else:
-        st.sidebar.error(f"Failed to load DICOMs: {exc}")
-
-
-with st.sidebar:
-    st.header("Phantom DICOMs")
-    st.markdown(
-        "**Only upload ACR phantom scans.** Do not upload patient images. "
-        "Free-tier deployments process files in memory; nothing is stored "
-        "between sessions, but de-identify before uploading anyway."
-    )
-    st.markdown(
-        "<div class='mri-small'>"
-        "The app runs one of two analyses depending on the series you pick:"
-        "<br>• <b>Axial series</b> — 11 axial slices (T1 or T2 ACR protocol)."
-        "<br>• <b>Sagittal localizer</b> — single sagittal scout image."
-        "<br><br>Phantom model + field-strength inputs live on the "
-        "<b>Analysis</b> tab so the algorithm inputs sit together."
-        "</div>",
-        unsafe_allow_html=True,
-    )
-    st.divider()
-
-    catalog = st.session_state.series_catalog
-    if catalog:
-        uid_options = [e["uid"] for e in catalog]
-        labels = {e["uid"]: _series_label(e) for e in catalog}
-        # Default the picker to the previously-selected UID (if still present),
-        # otherwise to the first entry in the list.
-        if st.session_state.get("selected_series_uid") not in uid_options:
-            st.session_state.selected_series_uid = uid_options[0]
-        def _on_series_pick():
-            # Set a one-shot flag the main page consumes to switch the active
-            # tab to Analysis after the user picks a different series.
-            st.session_state.pending_tab_switch = "Analysis"
-
-        st.selectbox(
-            f"Series ({len(catalog)} loaded)",
-            options=uid_options,
-            format_func=lambda u: labels[u],
-            key="selected_series_uid",
-            on_change=_on_series_pick,
-            help="Pick which series to analyze. Drop more files below to "
-                 "extend this list.",
-        )
-
-        if st.button("Clear all series", width="stretch"):
-            for k in ("series", "results", "series_warnings",
-                      "view_wl", "view_ww",
-                      "series_catalog", "selected_series_uid", "loaded_series_uid"):
-                st.session_state.pop(k, None)
-            st.rerun()
-
-    new_uploads = st.file_uploader(
-        "Add DICOMs (drop files or a .zip)",
-        type=None,
-        accept_multiple_files=True,
-        key=f"uploader_{st.session_state.uploader_nonce}",
-        help="Drop .dcm files, a folder zip, or any mix. Each batch is scanned "
-             "and added to the series list above.",
-    )
-
-    if new_uploads:
-        try:
-            new_entries = _catalog_uploads(new_uploads)
-        except Exception as exc:  # pragma: no cover - defensive
-            _show_load_error(exc)
-            new_entries = []
-        existing_uids = {e["uid"] for e in st.session_state.series_catalog}
-        added = [e for e in new_entries if e["uid"] not in existing_uids]
-        if added:
-            st.session_state.series_catalog = st.session_state.series_catalog + added
-        elif new_entries:
-            st.sidebar.info(
-                f"All {len(new_entries)} series in that batch are already in the list."
-            )
-        elif not new_entries:
-            _show_load_error(DicomLoadError(
-                "No DICOM files found in the upload.",
-                tip="The uploader accepts .dcm files or zips containing them.",
-            ))
-        # Bump the nonce so the widget remounts as an empty drop zone on rerun.
-        st.session_state.uploader_nonce += 1
-        st.rerun()
-
-    with st.expander("Advanced — load from a local folder"):
-        local_folder = st.text_input(
-            "Path to a folder of .dcm files",
-            value="",
-            help="Only works when running the app locally, not on Streamlit Cloud.",
-        )
-
-    st.divider()
-    st.caption(f"App version {APP_VERSION}")
+local_folder = uploads.render_sidebar(APP_VERSION)
 
 # --------------------------------------------------------------------------- #
 # Load series from the catalog selection                                      #
@@ -330,7 +169,7 @@ if local_folder.strip():
         st.session_state.results = {}
         st.session_state.series_warnings = validate_series(series)
     except Exception as exc:
-        _show_load_error(exc)
+        uploads.show_load_error(exc)
 elif st.session_state.series_catalog and st.session_state.get("selected_series_uid"):
     chosen_uid = st.session_state["selected_series_uid"]
     chosen = next((e for e in st.session_state.series_catalog
@@ -343,7 +182,7 @@ elif st.session_state.series_catalog and st.session_state.get("selected_series_u
             st.session_state.series_warnings = validate_series(series)
             st.session_state.loaded_series_uid = chosen_uid
         except Exception as exc:
-            _show_load_error(exc)
+            uploads.show_load_error(exc)
     else:
         series = st.session_state.series
 
@@ -991,178 +830,7 @@ with tab_history:
 
 # ----- Validation (testing mode) --------------------------------------- #
 with tab_validation:
-    st.subheader("Validation Mode")
-    st.caption(
-        "For pilot testing only. Use this tab to record manual measurements alongside "
-        "the app's automated results, dataset by dataset. Everything you enter lives "
-        "in this browser tab; use **Download log CSV** to save it permanently."
-    )
-
-    # ----- Testing checklist -----
-    st.markdown("### Per-dataset testing checklist")
-    cols = st.columns(2)
-    with cols[0]:
-        if analysis_mode == "axial":
-            st.markdown(
-                "- Upload one anonymized ACR axial phantom series\n"
-                "- Confirm metadata strip matches the scanner/series you expected\n"
-                "- Review **Series warnings** (if any)\n"
-                "- On **Analysis**: confirm slice roles and run the automated tests\n"
-                "- Review **Results**; if passing, score the visual tests on **Manual scoring**"
-            )
-        else:
-            st.markdown(
-                "- Upload one anonymized ACR sagittal localizer image\n"
-                "- Confirm metadata strip matches the scanner/series you expected\n"
-                "- Run the S-I length test on **Analysis**"
-            )
-    with cols[1]:
-        st.markdown(
-            "- For every test, **open its overlay image** and verify the ROIs land correctly\n"
-            "- Note the **Confidence** chip — investigate anything below HIGH\n"
-            "- Enter your manual measurements below\n"
-            "- Click **Add to validation log**\n"
-            "- Export the PDF report and the log CSV"
-        )
-
-    st.markdown("### Record this dataset")
-    if not st.session_state.results:
-        if analysis_mode == "axial":
-            st.info("Run the automated tests on the **Analysis** tab first; "
-                    "then come back to record this dataset.")
-        else:
-            st.info("Run the S-I length test on the **Analysis** tab first; "
-                    "then come back to record this dataset.")
-    else:
-        v_cols = st.columns(3)
-        ds_name = v_cols[0].text_input(
-            "Dataset label",
-            value=md.patient_id or md.series_description or "dataset",
-            help="A short name you use to identify this dataset in the log.",
-        )
-        vendor = v_cols[1].selectbox(
-            "Vendor",
-            options=["Siemens", "GE", "Philips", "Canon", "Other", md.manufacturer or "Unknown"],
-            index=5,
-        )
-        scanner_label = v_cols[2].text_input(
-            "Scanner / model",
-            value=f"{md.manufacturer} {md.model}".strip(),
-        )
-
-        st.markdown(
-            "**Manual measurements (optional, leave blank if you don't have one).** "
-            "Use whatever your local QA workflow produces — caliper measurements at the "
-            "console, your existing tool's numbers, etc. Units shown in parentheses."
-        )
-
-        manual: dict[str, str] = {}
-        manual_cols = st.columns(3)
-        if analysis_mode == "sagittal":
-            manual_fields = [
-                ("si_length", "Superior-inferior length (mm)"),
-            ]
-        else:
-            manual_fields = [
-                ("geo_slice1",       "Geometric accuracy slice 1 (mm)"),
-                ("geo_slice5_h",     "Geometric accuracy slice 5 horizontal (mm)"),
-                ("geo_slice5_v",     "Geometric accuracy slice 5 vertical (mm)"),
-                ("slice_thickness",  "Slice thickness (mm)"),
-                ("slice_position_1", "Slice position Δ slice 1 (mm)"),
-                ("slice_position_11","Slice position Δ slice 11 (mm)"),
-                ("piu",              "PIU (%)"),
-                ("psg",              "PSG (%)"),
-                ("res_ul",           "High-contrast UL smallest resolvable (mm)"),
-                ("res_lr",           "High-contrast LR smallest resolvable (mm)"),
-                ("lcd_total",        "Low-contrast total spokes seen"),
-            ]
-        for i, (k, label) in enumerate(manual_fields):
-            manual[k] = manual_cols[i % 3].text_input(label, value="")
-
-        notes = st.text_area("Notes / observations for this dataset", value="", height=80)
-
-        if st.button("Add to validation log", type="primary"):
-            verdict, counts = verdict_of(st.session_state.results.values())
-            row = {
-                "logged_at":       datetime.now().isoformat(timespec="seconds"),
-                "dataset":         ds_name,
-                "vendor":          vendor,
-                "scanner":         scanner_label,
-                "field_strength_t": md.field_strength_t,
-                "study_date":      md.study_date or "",
-                "series":          md.series_description or "",
-                "sequence":        md.sequence,
-                "n_slices":        md.n_slices,
-                "verdict":         verdict,
-                "pass_count":      counts["PASS"],
-                "fail_count":      counts["FAIL"],
-                "review_count":    counts["REVIEW"],
-                "error_count":     counts["ERROR"],
-            }
-            # Flatten per-test result + manual side-by-side
-            row["analysis_mode"] = analysis_mode
-            for tid, _, _ in test_order:
-                r = st.session_state.results.get(tid)
-                if r is None:
-                    continue
-                key = r.measurements[0] if r.measurements else None
-                row[f"{tid}__status"]     = r.status_text()
-                row[f"{tid}__confidence"] = r.confidence
-                row[f"{tid}__warnings"]   = " | ".join(r.warnings)
-                if key is not None:
-                    row[f"{tid}__app_value"] = key.value
-                    row[f"{tid}__unit"]      = key.unit
-                if r.error:
-                    row[f"{tid}__error"] = r.error
-            for k, v in manual.items():
-                if v.strip():
-                    row[f"manual__{k}"] = v.strip()
-            if notes.strip():
-                row["notes"] = notes.strip()
-            st.session_state.validation_log.append(row)
-            st.success(f"Logged. {len(st.session_state.validation_log)} entries this session.")
-
-    st.divider()
-    st.markdown("### Validation log this session")
-    if not st.session_state.validation_log:
-        st.info("No validation entries recorded yet. Use the form above to add one.")
-    else:
-        # Show a compact view (a few key columns) and a full CSV download
-        compact = [
-            {
-                "Logged":    e["logged_at"],
-                "Dataset":   e["dataset"],
-                "Vendor":    e["vendor"],
-                "Scanner":   e["scanner"],
-                "Verdict":   e["verdict"],
-                "Pass/Fail/Review/Error": f"{e['pass_count']}/{e['fail_count']}/{e['review_count']}/{e['error_count']}",
-            }
-            for e in st.session_state.validation_log
-        ]
-        st.dataframe(compact, hide_index=True, width="stretch")
-
-        # Build CSV (union of all keys across entries)
-        import csv as _csv
-        keys = []
-        seen = set()
-        for e in st.session_state.validation_log:
-            for k in e.keys():
-                if k not in seen:
-                    seen.add(k); keys.append(k)
-        buf = io.StringIO()
-        writer = _csv.DictWriter(buf, fieldnames=keys)
-        writer.writeheader()
-        for e in st.session_state.validation_log:
-            writer.writerow(e)
-        st.download_button(
-            "Download validation log (CSV)",
-            buf.getvalue(),
-            file_name=f"mriqa_validation_log_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-        )
-        if st.button("Clear validation log", help="Wipes the log in this browser tab."):
-            st.session_state.validation_log = []
-            st.rerun()
+    validation.render(series, test_order, analysis_mode)
 
 
 # ----- Export ----------------------------------------------------------- #
