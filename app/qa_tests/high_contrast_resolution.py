@@ -62,20 +62,6 @@ def crop_resolution_insert(
     return image[y0:y1, x0:x1], (y0, y1, x0, x1)
 
 
-def _longest_true_run(mask):
-    best = (0, 0, 0)
-    start = None
-    seq = list(mask) + [False]
-    for i, v in enumerate(seq):
-        if v and start is None:
-            start = i
-        elif not v and start is not None:
-            if i - start > best[0]:
-                best = (i - start, start, i - 1)
-            start = None
-    return best
-
-
 def _cluster_runs(active, min_gap_for_split):
     """Group contiguous-True runs in `active`. Runs separated by fewer than
     `min_gap_for_split` False columns are merged (treated as within-grid
@@ -129,7 +115,8 @@ def _detect_resolution_grids(image, geom):
     hi = void + 0.35 * span
     arr = (win > lo) & (win < hi)
     rc = arr.sum(axis=1)
-    L, rs, re = _longest_true_run(rc > max(3, rc.max() * 0.20))
+    runs = contiguous_runs(rc > max(3, rc.max() * 0.20))
+    L, rs, re = max(((e - s + 1, s, e) for s, e in runs), default=(0, 0, 0))
     if L < 6:
         return None, None
     cc = arr[rs:re + 1].sum(axis=0)

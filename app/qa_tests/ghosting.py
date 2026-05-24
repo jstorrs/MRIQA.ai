@@ -20,12 +20,12 @@ guard against the ROI falling off the image.
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 
 from ..io_dicom.dicom_loader import DicomSeries
-from ..utils.geometry import circular_roi_mask, elliptical_roi_mask
+from ..utils.geometry import (
+    circular_roi_mask, elliptical_roi_mask, radius_px_for_area_cm2,
+)
 from ..utils.phantom import localize_phantom, phantom_quality_warnings
 from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
@@ -57,8 +57,7 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
             res.add_warning(w, severity="medium")
 
         # Large ROI
-        large_area_mm2 = large_area * 100.0
-        r_large = math.sqrt(large_area_mm2 / (ps[0] * ps[1]) / math.pi)
+        r_large = radius_px_for_area_cm2(large_area, ps)
         r_large = min(r_large, geom.radius_px * 0.85)
         large_mask = circular_roi_mask(img.shape, geom.cy_px, geom.cx_px, r_large)
         s_large = float(img[large_mask].mean())

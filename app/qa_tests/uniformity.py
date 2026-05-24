@@ -31,18 +31,11 @@ import numpy as np
 from scipy.ndimage import uniform_filter
 
 from ..io_dicom.dicom_loader import DicomSeries
-from ..utils.geometry import circular_roi_mask
+from ..utils.geometry import circular_roi_mask, radius_px_for_area_cm2
 from ..utils.phantom import localize_phantom, phantom_quality_warnings
 from ..utils.phantom_spec import PhantomSpec
 from ..utils.viz import render_annotated
 from .base import Measurement, TestResult
-
-
-def _radius_for_area_px(area_cm2: float, pixel_spacing_mm) -> float:
-    area_mm2 = area_cm2 * 100.0  # cm² -> mm²
-    px_area_mm2 = pixel_spacing_mm[0] * pixel_spacing_mm[1]
-    radius_px = math.sqrt(area_mm2 / px_area_mm2 / math.pi)
-    return radius_px
 
 
 def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
@@ -64,10 +57,10 @@ def run(series: DicomSeries, *, spec: PhantomSpec | None = None) -> TestResult:
         for w in phantom_quality_warnings(geom, ps, spec):
             res.add_warning(w, severity="medium")
 
-        r_large = _radius_for_area_px(large_area, ps)
+        r_large = radius_px_for_area_cm2(large_area, ps)
         # Don't let the large ROI exceed the phantom interior
         r_large = min(r_large, geom.radius_px * 0.85)
-        r_small = _radius_for_area_px(small_area, ps)
+        r_small = radius_px_for_area_cm2(small_area, ps)
 
         large_mask = circular_roi_mask(img.shape, geom.cy_px, geom.cx_px, r_large)
         # The ACR procedure requires the small 1 cm² ROI to be placed *inside*

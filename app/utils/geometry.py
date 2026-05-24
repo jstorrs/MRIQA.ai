@@ -2,8 +2,20 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
-from scipy.interpolate import interp1d
+
+
+def radius_px_for_area_cm2(area_cm2: float, pixel_spacing_mm) -> float:
+    """Pixel radius of a circle whose physical area is ``area_cm2``.
+
+    ``pixel_spacing_mm`` is ``(row, col)``; the row/col product gives the
+    per-pixel area in mm².
+    """
+    area_mm2 = area_cm2 * 100.0
+    px_area_mm2 = pixel_spacing_mm[0] * pixel_spacing_mm[1]
+    return math.sqrt(area_mm2 / px_area_mm2 / math.pi)
 
 
 def contiguous_runs(mask) -> list[tuple[int, int]]:
