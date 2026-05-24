@@ -16,6 +16,7 @@ from ..io_dicom.dicom_loader import DicomSeries
 from ..qa_tests import AnalysisMode, TestSpec
 from ..qa_tests.base import TestResult, verdict_of
 from .badges import confidence_badge, status_badge
+from .banner import banner
 from .history import snapshot_run
 
 
@@ -127,19 +128,16 @@ def render(
     _pending_visual_nudge(analysis_mode, scope)
 
     verdict, counts = verdict_of(displayed_results.values())
-    verdict_cls = _VERDICT_CSS_CLASS[verdict]
-    st.markdown(
+    banner(
         f"""
-        <div class='mri-banner mri-banner-{verdict_cls}'>
-          <div style='font-size:1.05em; font-weight:600;'>
-            Overall verdict: {status_badge(verdict)}
-          </div>
-          <div class='mri-small' style='margin-top:4px;'>
-            {counts['PASS']} pass · {counts['FAIL']} fail · {counts['REVIEW']} review · {counts['ERROR']} error
-          </div>
+        <div style='font-size:1.05em; font-weight:600;'>
+          Overall verdict: {status_badge(verdict)}
+        </div>
+        <div class='mri-small' style='margin-top:4px;'>
+          {counts['PASS']} pass · {counts['FAIL']} fail · {counts['REVIEW']} review · {counts['ERROR']} error
         </div>
         """,
-        unsafe_allow_html=True,
+        status=_VERDICT_CSS_CLASS[verdict],
     )
 
     rows = []

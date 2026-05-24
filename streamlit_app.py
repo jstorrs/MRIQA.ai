@@ -32,6 +32,7 @@ from app.ui import (                                  # noqa: E402
     results_view, uploads, validation, viewer,
 )
 from app.ui.badges import normalize_img                # noqa: E402
+from app.ui.banner import banner                       # noqa: E402
 
 EXPORTS_DIR = _ROOT / "exports"
 EXPORTS_DIR.mkdir(exist_ok=True)
@@ -214,19 +215,11 @@ if st.session_state.get("active_mode") != analysis_mode:
     st.session_state.active_mode = analysis_mode
 
 if analysis_mode == "sagittal":
-    st.markdown(
-        "<div class='mri-banner mri-banner-dash'>"
-        "<b>Sagittal localizer analysis</b> — single-image S-I length check."
-        "</div>",
-        unsafe_allow_html=True,
-    )
+    banner("<b>Sagittal localizer analysis</b> — single-image S-I length check.")
 else:
-    st.markdown(
-        "<div class='mri-banner mri-banner-dash'>"
+    banner(
         f"<b>Axial series analysis</b> — {len(AXIAL_TEST_ORDER)}-test ACR protocol "
         f"({md.n_slices} slices loaded)."
-        "</div>",
-        unsafe_allow_html=True,
     )
 
 # --------------------------------------------------------------------------- #

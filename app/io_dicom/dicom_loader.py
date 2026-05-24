@@ -129,6 +129,60 @@ class DicomLoadError(ValueError):
         self.tip = tip
 
 
+def _str_tag(ds: FileDataset, tag: str) -> str:
+    return str(getattr(ds, tag, "") or "")
+
+
+def _float_tag(ds: FileDataset, tag: str) -> float:
+    return float(getattr(ds, tag, 0.0) or 0.0)
+
+
+def _int_tag(ds: FileDataset, tag: str) -> int:
+    return int(getattr(ds, tag, 0) or 0)
+
+
+def _guess_sequence(description: str) -> str:
+    desc = description.lower()
+    if "t1" in desc:
+        return "T1"
+    if "t2" in desc or "dual" in desc:
+        return "T2"
+    if "loc" in desc:
+        return "Localizer"
+    return "Unknown"
+
+
+def _metadata_from_dataset(
+    head: FileDataset,
+    volume: np.ndarray,
+    discarded_echo_times: list[float],
+) -> SeriesMetadata:
+    """Extract a SeriesMetadata from the first dataset of the series."""
+    ps = getattr(head, "PixelSpacing", [1.0, 1.0])
+    description = _str_tag(head, "SeriesDescription")
+    meta = SeriesMetadata(
+        patient_name=_str_tag(head, "PatientName"),
+        patient_id=_str_tag(head, "PatientID"),
+        study_date=_str_tag(head, "StudyDate"),
+        manufacturer=_str_tag(head, "Manufacturer"),
+        model=_str_tag(head, "ManufacturerModelName"),
+        field_strength_t=_float_tag(head, "MagneticFieldStrength"),
+        series_description=description,
+        series_number=_int_tag(head, "SeriesNumber"),
+        sequence=_guess_sequence(description),
+        pixel_spacing_mm=(float(ps[0]), float(ps[1])),
+        slice_thickness_mm=_float_tag(head, "SliceThickness"),
+        spacing_between_slices_mm=_float_tag(head, "SpacingBetweenSlices"),
+        rows=int(volume.shape[1]),
+        cols=int(volume.shape[2]),
+        n_slices=int(volume.shape[0]),
+        repetition_time_ms=_float_tag(head, "RepetitionTime"),
+        echo_time_ms=_float_tag(head, "EchoTime"),
+        discarded_echo_times_ms=list(discarded_echo_times),
+    )
+    return meta
+
+
 def _pad_or_crop(arr: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
     """Make sure all slices share the same (rows, cols)."""
     out = np.zeros(target_shape, dtype=arr.dtype)
@@ -238,39 +292,7 @@ def load_series(sources: Iterable) -> DicomSeries:
     arrays = [a if a.shape == shape else _pad_or_crop(a, shape) for a in arrays]
     volume = np.stack(arrays, axis=0)
 
-    # Metadata from first dataset
-    head = datasets[0]
-    meta = SeriesMetadata(
-        patient_name=str(getattr(head, "PatientName", "") or ""),
-        patient_id=str(getattr(head, "PatientID", "") or ""),
-        study_date=str(getattr(head, "StudyDate", "") or ""),
-        manufacturer=str(getattr(head, "Manufacturer", "") or ""),
-        model=str(getattr(head, "ManufacturerModelName", "") or ""),
-        field_strength_t=float(getattr(head, "MagneticFieldStrength", 0.0) or 0.0),
-        series_description=str(getattr(head, "SeriesDescription", "") or ""),
-        series_number=int(getattr(head, "SeriesNumber", 0) or 0),
-        slice_thickness_mm=float(getattr(head, "SliceThickness", 0.0) or 0.0),
-        spacing_between_slices_mm=float(getattr(head, "SpacingBetweenSlices", 0.0) or 0.0),
-        rows=int(volume.shape[1]),
-        cols=int(volume.shape[2]),
-        n_slices=int(volume.shape[0]),
-        repetition_time_ms=float(getattr(head, "RepetitionTime", 0.0) or 0.0),
-        echo_time_ms=float(getattr(head, "EchoTime", 0.0) or 0.0),
-        discarded_echo_times_ms=list(discarded_echo_times),
-    )
-    ps = getattr(head, "PixelSpacing", [1.0, 1.0])
-    meta.pixel_spacing_mm = (float(ps[0]), float(ps[1]))
-
-    # Guess sequence type
-    desc = meta.series_description.lower()
-    if "t1" in desc:
-        meta.sequence = "T1"
-    elif "t2" in desc or "dual" in desc:
-        meta.sequence = "T2"
-    elif "loc" in desc:
-        meta.sequence = "Localizer"
-    else:
-        meta.sequence = "Unknown"
+    meta = _metadata_from_dataset(datasets[0], volume, discarded_echo_times)
 
     slice_locations = [float(getattr(ds, "SliceLocation", i)) for i, ds in enumerate(datasets)]
     instance_numbers = [int(getattr(ds, "InstanceNumber", i + 1)) for i, ds in enumerate(datasets)]
