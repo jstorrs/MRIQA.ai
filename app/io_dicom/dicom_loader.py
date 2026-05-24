@@ -331,7 +331,15 @@ def default_acr_slice_map(n_slices: int, spec: PhantomSpec | None = None) -> dic
     *slice 5* (central), *slice 7* (uniform region), and *slice 11* (the
     superior wedge-pair). When a series matches the protocol slice count
     we use the spec's standard mapping. For shorter series we fall back
-    to evenly-spaced picks so the app remains usable on partial data."""
+    to evenly-spaced picks so the app remains usable on partial data.
+
+    The returned key set is intentionally partial when ``n_slices`` is
+    very small: roles 8-10 are omitted if the offset arithmetic from
+    role 11 would go negative, and the empty dict is returned for an
+    empty series. Callers reach individual slices via
+    ``DicomSeries.try_slice(role, spec_fallback=True)``, which handles
+    missing roles by falling back to the spec's standard mapping.
+    """
     if spec is None:
         spec = default_phantom()
     if n_slices >= spec.n_protocol_slices:
